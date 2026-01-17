@@ -1,117 +1,207 @@
 import streamlit as st
 import pandas as pd
-import datetime
 
-# 1. Configuração inicial da página
-st.set_page_config(page_title="Dashboard de Membros", layout="wide")
+# ================================
+# CONFIGURAÇÃO DA PÁGINA
+# ================================
+st.set_page_config(
+    page_title="Sistema de Filtro e Exportação de Membros",
+    layout="wide"
+)
 
-# 2. Carregamento dos dados com cache para evitar custos de reprocessamento
+# ================================
+# CARGA DE DADOS
+# ================================
 @st.cache_data
 def carregar_dados():
-    # Carrega o dataset da raiz do repositório
-    df = pd.read_csv('dataset.csv')
-    
-    # Converter colunas para datetime
-    df['data_ultima_visita'] = pd.to_datetime(df['data_ultima_visita'])
-    df['data_ultima_compra'] = pd.to_datetime(df['data_ultima_compra'])
-    
-    # PREENCHIMENTO DE NULOS (Tratamento para evitar erro NaTType)
-    # Usamos 1900-01-01 para representar quem não tem data (ex: nunca comprou)
-    data_padrao = pd.Timestamp('1900-01-01')
-    df['data_ultima_visita'] = df['data_ultima_visita'].fillna(data_padrao)
-    df['data_ultima_compra'] = df['data_ultima_compra'].fillna(data_padrao)
-    
-    # Converte para data simples (formato Python date) exigido pelo st.date_input
-    df['data_ultima_visita'] = df['data_ultima_visita'].dt.date
-    df['data_ultima_compra'] = df['data_ultima_compra'].dt.date
-    
+    df = pd.read_csv("dataset.csv")
+
+    # Conversão de datas
+    df["data_ultima_visita"] = pd.to_datetime(df["data_ultima_visita"], errors="coerce")
+    df["data_ultima_compra"] = pd.to_datetime(df["data_ultima_compra"], errors="coerce")
+
+    # Criação de STATUS DE COMPRA (REGRA DE NEGÓCIO)
+    df["status_compra"] = df["data_ultima_compra"].isna().map(
+        {True: "Nunca comprou", False: "Já comprou"}
+    )
+
     return df
 
-# Tenta carregar e processar a interface
+
 try:
     df = carregar_dados()
 
-    # --- INTERFACE ---
-    st.title("📂 Sistema de Filtro e Exportação")
+    # ================================
+    # HEADER
+    # ================================
+    st.title("📂 Sistema Profissional de Filtro e Exportação")
 
-    # 3. Criação dos Filtros na Barra Lateral (Sidebar)
-    st.sidebar.header("Filtros de Segmentação")
-
-    # Filtro 1: Categoria
-    categorias_selecionadas = st.sidebar.multiselect(
-        "Selecione a Categoria:",
-        options=sorted(df['categoria'].unique()),
-        default=df['categoria'].unique()
+    st.markdown(
+        """
+        **Regras de Negócio**
+        - *Nunca comprou*: cliente sem data de compra registrada  
+        - Filtros de data de compra afetam **somente quem já comprou**  
+        - Nenhuma data fictícia é utilizada  
+        """
     )
 
-    # Filtro 2: Setor
-    setores_selecionados = st.sidebar.multiselect(
-        "Selecione o Setor:",
-        options=sorted(df['setor'].unique()),
-        default=df['setor'].unique()
+    # ================================
+    # SIDEBAR - FILTROS
+    # ================================
+    st.sidebar.header("🔎 Filtros")
+
+    # Categoria
+    categorias = st.sidebar.multiselect(
+        "Categoria",
+        options=sorted(df["categoria"].dropna().unique()),
+        default=sorted(df["categoria"].dropna().unique())
     )
 
-    # Definindo limites para os calendários baseados nos dados
-    min_visita = df['data_ultima_visita'].min()
-    max_visita = df['data_ultima_visita'].max()
+    # Setor
+    setores = st.sidebar.multiselect(
+        "Setor",
+        options=sorted(df["setor"].dropna().unique()),
+        default=sorted(df["setor"].dropna().unique())
+    )
 
-    # Filtro 3: Data de Última Visita (Range)
-    data_visita_range = st.sidebar.date_input(
-        "Período de Última Visita:",
+    # Status de Compra
+    status_compra = st.sidebar.multiselect(
+        "Status de Compra",
+        options=["Nunca comprou", "Já comprou"],
+        default=["Nunca comprou", "Já comprou"]
+    )
+
+    # ================================
+    # FILTROS DE DATA
+    # ================================
+    st.sidebar.subheader("📅 Datas")
+
+    # Última visita
+    min_visita = df["data_ultima_visita"].min()
+    max_visita = df["data_ultima_visita"].max()
+
+    data_visita = st.sidebar.date_input(
+        "Período da Última Visita",
         value=(min_visita, max_visita),
         min_value=min_visita,
         max_value=max_visita
     )
 
-    # Definindo limites para o filtro de compra
-    min_compra = df['data_ultima_compra'].min()
-    max_compra = df['data_ultima_compra'].max()
+    # Última compra (apenas quem já comprou)
+    df_com_compra = df[df["data_ultima_compra"].notna()]
 
-    # Filtro 4: Data de Última Compra (Range)
-    data_compra_range = st.sidebar.date_input(
-        "Período de Última Compra:",
-        value=(min_compra, max_compra),
-        min_value=min_compra,
-        max_value=max_compra
+    if not df_com_compra.empty:
+        min_compra = df_com_compra["data_ultima_compra"].min()
+        max_compra = df_com_compra["data_ultima_compra"].max()
+
+        data_compra = st.sidebar.date_input(
+            "Período da Última Compra (somente quem já comprou)",
+            value=(min_compra, max_compra),
+            min_value=min_compra,
+            max_value=max_compra
+        )
+    else:
+        data_compra = None
+
+    # ================================
+    # APLICAÇÃO DOS FILTROS
+    # ================================
+    mask = (
+        df["categoria"].isin(categorias)
+        & df["setor"].isin(setores)
+        & df["status_compra"].isin(status_compra)
     )
 
-    # 4. Aplicando os Filtros
-    # Filtro de Categoria e Setor
-    mask = (df['categoria'].isin(categorias_selecionadas)) & (df['setor'].isin(setores_selecionados))
+    # Filtro de visita
+    if isinstance(data_visita, tuple) and len(data_visita) == 2:
+        mask &= (
+            df["data_ultima_visita"].dt.date >= data_visita[0]
+        ) & (
+            df["data_ultima_visita"].dt.date <= data_visita[1]
+        )
 
-    # Filtro de Datas (Proteção para quando o usuário seleciona apenas uma data no range)
-    if isinstance(data_visita_range, tuple) and len(data_visita_range) == 2:
-        mask &= (df['data_ultima_visita'] >= data_visita_range[0]) & (df['data_ultima_visita'] <= data_visita_range[1])
-    
-    if isinstance(data_compra_range, tuple) and len(data_compra_range) == 2:
-        mask &= (df['data_ultima_compra'] >= data_compra_range[0]) & (df['data_ultima_compra'] <= data_compra_range[1])
+    # Filtro de compra (aplicado apenas a quem comprou)
+    if data_compra and isinstance(data_compra, tuple) and len(data_compra) == 2:
+        mask &= (
+            (df["data_ultima_compra"].isna()) |
+            (
+                (df["data_ultima_compra"].dt.date >= data_compra[0]) &
+                (df["data_ultima_compra"].dt.date <= data_compra[1])
+            )
+        )
 
     df_filtrado = df[mask]
 
-    # 5. Exibição de Métricas
-    qtd_unique_members = df_filtrado['member_pk'].nunique()
-    
-    col1, col2 = st.columns(2)
-    # Formatação brasileira para números (ponto para milhar)
-    col1.metric("Membros Únicos (member_pk)", f"{qtd_unique_members:,}".replace(",", "."))
-    col2.metric("Total de Registros Exibidos", f"{len(df_filtrado):,}".replace(",", "."))
+    # ================================
+    # MÉTRICAS
+    # ================================
+    col1, col2, col3, col4 = st.columns(4)
 
-    # 6. Área Central: Exibição dos Resultados
-    st.subheader("📊 Visualização dos Dados")
-    st.dataframe(df_filtrado, use_container_width=True)
+    col1.metric(
+        "Membros Únicos",
+        f"{df_filtrado['member_pk'].nunique():,}".replace(",", ".")
+    )
 
-    # 7. Botão de Exportação
+    col2.metric(
+        "Total de Registros",
+        f"{len(df_filtrado):,}".replace(",", ".")
+    )
+
+    col3.metric(
+        "Já Compraram",
+        f"{(df_filtrado['status_compra'] == 'Já comprou').sum():,}".replace(",", ".")
+    )
+
+    col4.metric(
+        "Nunca Compraram",
+        f"{(df_filtrado['status_compra'] == 'Nunca comprou').sum():,}".replace(",", ".")
+    )
+
+    # ================================
+    # QUALIDADE DOS DADOS
+    # ================================
+    st.subheader("🧪 Qualidade dos Dados")
+
+    perc_sem_compra = (
+        (df_filtrado["status_compra"] == "Nunca comprou").mean() * 100
+        if len(df_filtrado) > 0 else 0
+    )
+
+    st.info(
+        f"📌 {perc_sem_compra:.1f}% dos registros filtrados **não possuem compra registrada**."
+    )
+
+    # ================================
+    # VISUALIZAÇÃO
+    # ================================
+    st.subheader("📊 Dados Filtrados")
+
+    st.dataframe(
+        df_filtrado,
+        use_container_width=True,
+        height=450
+    )
+
+    # ================================
+    # EXPORTAÇÃO
+    # ================================
     st.divider()
-    csv_data = df_filtrado.to_csv(index=False).encode('utf-8')
+
+    st.warning(
+        f"O arquivo exportado conterá {len(df_filtrado):,} registros."
+        .replace(",", ".")
+    )
+
+    csv = df_filtrado.to_csv(index=False).encode("utf-8")
 
     st.download_button(
-        label="📥 Exportar Base Filtrada para CSV",
-        data=csv_data,
-        file_name='base_filtrada.csv',
-        mime='text/csv',
+        label="📥 Exportar CSV",
+        data=csv,
+        file_name="base_filtrada.csv",
+        mime="text/csv"
     )
 
 except FileNotFoundError:
-    st.error("Erro: O arquivo 'dataset.csv' não foi encontrado no seu GitHub.")
+    st.error("Arquivo dataset.csv não encontrado.")
 except Exception as e:
-    st.error(f"Ocorreu um erro inesperado: {e}")
+    st.error(f"Erro inesperado: {e}")

@@ -6,16 +6,39 @@ st.set_page_config(page_title="Dashboard de Membros", layout="wide")
 
 # 2. Carregamento dos dados
 @st.cache_data
+import datetime
+
+@st.cache_data
 def carregar_dados():
-    # IMPORTANTE: No GitHub, mantenha o dataset.csv na mesma pasta do código
-    # e use apenas o nome do arquivo, sem o caminho C:/Users/...
-    df = pd.read_csv('dataset.csv') 
+    df = pd.read_csv('dataset.csv')
     
-    # Converter colunas de data para o formato datetime do pandas
+    # Converter para datetime
     df['data_ultima_visita'] = pd.to_datetime(df['data_ultima_visita'])
     df['data_ultima_compra'] = pd.to_datetime(df['data_ultima_compra'])
+    
+    # PREENCHIMENTO DE NULOS:
+    # Se não tem visita, usamos uma data muito antiga
+    df['data_ultima_visita'] = df['data_ultima_visita'].fillna(pd.Timestamp('1900-01-01'))
+    # Se não tem compra, usamos 1900-01-01 (indica que nunca comprou)
+    df['data_ultima_compra'] = df['data_ultima_compra'].fillna(pd.Timestamp('1900-01-01'))
+    
+    # Converter para o formato de data simples do Python (necessário para o calendário)
+    df['data_ultima_visita'] = df['data_ultima_visita'].dt.date
+    df['data_ultima_compra'] = df['data_ultima_compra'].dt.date
+    
     return df
 
+# --- Dentro da barra lateral ---
+# Agora garantimos que o calendário pegue a data mínima (que será 1900 se houver nulos)
+min_visita = df['data_ultima_visita'].min()
+max_visita = df['data_ultima_visita'].max()
+
+data_visita_range = st.sidebar.date_input(
+    "Período de Última Visita:",
+    value=(min_visita, max_visita),
+    min_value=min_visita,
+    max_value=max_visita
+)
 try:
     df = carregar_dados()
 

@@ -1,13 +1,11 @@
 import streamlit as st
 import pandas as pd
+import datetime
 
 # 1. Configuração inicial da página
 st.set_page_config(page_title="Dashboard de Membros", layout="wide")
 
 # 2. Carregamento dos dados
-@st.cache_data
-import datetime
-
 @st.cache_data
 def carregar_dados():
     df = pd.read_csv('dataset.csv')

@@ -1,121 +1,100 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import plotly.express as px
 
-# 1. Configuração da Página (Design UX)
-st.set_page_config(
-    page_title="Dashboard Pro | Vendas 2024",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# 1. Configuração inicial da página
+st.set_page_config(page_title="Dashboard de Membros", layout="wide")
 
-# 2. Gerando Dados Fictícios para o exemplo
+# 2. Carregamento dos dados
 @st.cache_data
-def gerar_dados():
-    np.random.seed(42)
-    datas = pd.date_range(start="2024-01-01", end="2024-12-31", freq="D")
-    categorias = ['Eletrônicos', 'Moda', 'Home Office', 'Beleza']
-    vendedores = ['Ana Paula', 'Bruno Silva', 'Carla Dias', 'Diego Souza']
+def carregar_dados():
+    # IMPORTANTE: No GitHub, mantenha o dataset.csv na mesma pasta do código
+    # e use apenas o nome do arquivo, sem o caminho C:/Users/...
+    df = pd.read_csv('dataset.csv') 
     
-    df = pd.DataFrame({
-        'Data': np.random.choice(datas, 500),
-        'Categoria': np.random.choice(categorias, 500),
-        'Vendedor': np.random.choice(vendedores, 500),
-        'Venda': np.random.uniform(100, 5000, 500).round(2),
-        'Satisfacao': np.random.randint(1, 6, 500)
-    })
-    return df.sort_values("Data")
+    # Converter colunas de data para o formato datetime do pandas
+    df['data_ultima_visita'] = pd.to_datetime(df['data_ultima_visita'])
+    df['data_ultima_compra'] = pd.to_datetime(df['data_ultima_compra'])
+    return df
 
-df = gerar_dados()
+try:
+    df = carregar_dados()
 
-# 3. Sidebar com UX Refinada
-with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/1055/1055644.png", width=80)
-    st.title("Painel de Filtros")
-    st.markdown("---")
+    # --- INTERFACE ---
+    st.title("📂 Sistema de Filtro e Exportação")
+
+    # 3. Criação dos Filtros na Barra Lateral (Sidebar)
+    st.sidebar.header("Filtros de Segmentação")
+
+    # Filtro 1: Categoria
+    categorias_selecionadas = st.sidebar.multiselect(
+        "Selecione a Categoria:",
+        options=df['categoria'].unique(),
+        default=df['categoria'].unique()
+    )
+
+    # Filtro 2: Setor
+    setores_selecionados = st.sidebar.multiselect(
+        "Selecione o Setor:",
+        options=df['setor'].unique(),
+        default=df['setor'].unique()
+    )
+
+    # Filtro 3: Data de Última Visita (Range)
+    min_visita = df['data_ultima_visita'].min().to_pydatetime()
+    max_visita = df['data_ultima_visita'].max().to_pydatetime()
+    data_visita_range = st.sidebar.date_input(
+        "Período de Última Visita:",
+        value=(min_visita, max_visita),
+        min_value=min_visita,
+        max_value=max_visita
+    )
+
+    # Filtro 4: Data de Última Compra (Range)
+    min_compra = df['data_ultima_compra'].min().to_pydatetime()
+    max_compra = df['data_ultima_compra'].max().to_pydatetime()
+    data_compra_range = st.sidebar.date_input(
+        "Período de Última Compra:",
+        value=(min_compra, max_compra),
+        min_value=min_compra,
+        max_value=max_compra
+    )
+
+    # 4. Aplicando os Filtros
+    # Filtro de texto/categoria
+    mask = (df['categoria'].isin(categorias_selecionadas)) & (df['setor'].isin(setores_selecionados))
+
+    # Filtro de datas (garantindo que o usuário selecionou o range completo [início, fim])
+    if len(data_visita_range) == 2:
+        mask &= (df['data_ultima_visita'].dt.date >= data_visita_range[0]) & (df['data_ultima_visita'].dt.date <= data_visita_range[1])
     
-    # Filtro de Data
-    data_inicio = st.date_input("Início", df['Data'].min())
-    data_fim = st.date_input("Fim", df['Data'].max())
+    if len(data_compra_range) == 2:
+        mask &= (df['data_ultima_compra'].dt.date >= data_compra_range[0]) & (df['data_ultima_compra'].dt.date <= data_compra_range[1])
+
+    df_filtrado = df[mask]
+
+    # 5. Exibição de Métricas (Quantidade Unique member_pk)
+    qtd_unique_members = df_filtrado['member_pk'].nunique()
     
-    # Filtro de Categoria
-    categorias_sel = st.multiselect("Categorias", options=df['Categoria'].unique(), default=df['Categoria'].unique())
-    
-    st.markdown("---")
-    st.info("O dashboard é atualizado automaticamente ao alterar os filtros.")
+    col1, col2 = st.columns(2)
+    col1.metric("Membros Únicos (member_pk)", f"{qtd_unique_members:,}".replace(",", "."))
+    col2.metric("Total de Registros", f"{len(df_filtrado):,}".replace(",", "."))
 
-# Aplicando Filtros
-df_filtrado = df[
-    (df['Data'].dt.date >= data_inicio) & 
-    (df['Data'].dt.date <= data_fim) &
-    (df['Categoria'].isin(categorias_sel))
-]
-
-# 4. Cabeçalho do Painel
-st.title("🚀 Dashboard Executivo de Vendas")
-st.markdown(f"Exibindo dados de **{data_inicio}** até **{data_fim}**")
-
-# 5. Métricas (KPIs) com estilo UX
-m1, m2, m3, m4 = st.columns(4)
-
-total_vendas = df_filtrado['Venda'].sum()
-ticket_medio = df_filtrado['Venda'].mean()
-qtd_pedidos = len(df_filtrado)
-media_sat = df_filtrado['Satisfacao'].mean()
-
-m1.metric("Faturamento Total", f"R$ {total_vendas:,.2f}", delta=f"{len(df_filtrado)} vendas")
-m2.metric("Ticket Médio", f"R$ {ticket_medio:,.2f}")
-m3.metric("Qtd. Pedidos", qtd_pedidos)
-m4.metric("Satisfação Média", f"{media_sat:.1f} ⭐")
-
-st.markdown("---")
-
-# 6. Gráficos (Visualização de Dados)
-col_esq, col_dir = st.columns([2, 1])
-
-with col_esq:
-    st.subheader("Evolução de Vendas no Tempo")
-    # Agrupando por data para o gráfico de linha
-    df_tempo = df_filtrado.groupby('Data')['Venda'].sum().reset_index()
-    fig_linha = px.line(df_tempo, x='Data', y='Venda', template="plotly_white", color_discrete_sequence=['#00CC96'])
-    st.plotly_chart(fig_linha, use_container_width=True)
-
-with col_dir:
-    st.subheader("Vendas por Categoria")
-    fig_pizza = px.pie(df_filtrado, values='Venda', names='Categoria', hole=0.4)
-    st.plotly_chart(fig_pizza, use_container_width=True)
-
-# 7. Tabela e Exportação
-with st.expander("🔎 Visualizar base completa e exportar"):
+    # 6. Área Central: Exibição dos Resultados
+    st.subheader("📊 Visualização dos Dados")
     st.dataframe(df_filtrado, use_container_width=True)
-    
-    csv = df_filtrado.to_csv(index=False).encode('utf-8')
+
+    # 7. Botão de Exportação
+    st.divider()
+    csv_data = df_filtrado.to_csv(index=False).encode('utf-8')
+
     st.download_button(
-        label="📥 Baixar Dados Filtrados (CSV)",
-        data=csv,
-        file_name='vendas_processadas.csv',
+        label="📥 Exportar Base Filtrada para CSV",
+        data=csv_data,
+        file_name='base_filtrada.csv',
         mime='text/csv',
     )
 
-# 8. Rodapé Estilizado
-st.markdown(
-    """
-    <style>
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: #f0f2f6;
-        color: #31333F;
-        text-align: center;
-        padding: 10px;
-        font-size: 12px;
-    }
-    </style>
-    <div class="footer">Dashboard desenvolvido com Streamlit | 2024</div>
-    """,
-    unsafe_allow_html=True
-)
+except FileNotFoundError:
+    st.error("Arquivo 'dataset.csv' não encontrado. Certifique-se de que ele está na raiz do seu repositório no GitHub.")
+except Exception as e:
+    st.error(f"Ocorreu um erro: {e}")

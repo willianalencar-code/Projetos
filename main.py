@@ -5,38 +5,29 @@ import datetime
 # 1. Configuração inicial da página
 st.set_page_config(page_title="Dashboard de Membros", layout="wide")
 
-# 2. Carregamento dos dados
+# 2. Carregamento dos dados com cache para evitar custos de reprocessamento
 @st.cache_data
 def carregar_dados():
+    # Carrega o dataset da raiz do repositório
     df = pd.read_csv('dataset.csv')
     
-    # Converter para datetime
+    # Converter colunas para datetime
     df['data_ultima_visita'] = pd.to_datetime(df['data_ultima_visita'])
     df['data_ultima_compra'] = pd.to_datetime(df['data_ultima_compra'])
     
-    # PREENCHIMENTO DE NULOS:
-    # Se não tem visita, usamos uma data muito antiga
-    df['data_ultima_visita'] = df['data_ultima_visita'].fillna(pd.Timestamp('1900-01-01'))
-    # Se não tem compra, usamos 1900-01-01 (indica que nunca comprou)
-    df['data_ultima_compra'] = df['data_ultima_compra'].fillna(pd.Timestamp('1900-01-01'))
+    # PREENCHIMENTO DE NULOS (Tratamento para evitar erro NaTType)
+    # Usamos 1900-01-01 para representar quem não tem data (ex: nunca comprou)
+    data_padrao = pd.Timestamp('1900-01-01')
+    df['data_ultima_visita'] = df['data_ultima_visita'].fillna(data_padrao)
+    df['data_ultima_compra'] = df['data_ultima_compra'].fillna(data_padrao)
     
-    # Converter para o formato de data simples do Python (necessário para o calendário)
+    # Converte para data simples (formato Python date) exigido pelo st.date_input
     df['data_ultima_visita'] = df['data_ultima_visita'].dt.date
     df['data_ultima_compra'] = df['data_ultima_compra'].dt.date
     
     return df
 
-# --- Dentro da barra lateral ---
-# Agora garantimos que o calendário pegue a data mínima (que será 1900 se houver nulos)
-min_visita = df['data_ultima_visita'].min()
-max_visita = df['data_ultima_visita'].max()
-
-data_visita_range = st.sidebar.date_input(
-    "Período de Última Visita:",
-    value=(min_visita, max_visita),
-    min_value=min_visita,
-    max_value=max_visita
-)
+# Tenta carregar e processar a interface
 try:
     df = carregar_dados()
 
@@ -49,20 +40,22 @@ try:
     # Filtro 1: Categoria
     categorias_selecionadas = st.sidebar.multiselect(
         "Selecione a Categoria:",
-        options=df['categoria'].unique(),
+        options=sorted(df['categoria'].unique()),
         default=df['categoria'].unique()
     )
 
     # Filtro 2: Setor
     setores_selecionados = st.sidebar.multiselect(
         "Selecione o Setor:",
-        options=df['setor'].unique(),
+        options=sorted(df['setor'].unique()),
         default=df['setor'].unique()
     )
 
+    # Definindo limites para os calendários baseados nos dados
+    min_visita = df['data_ultima_visita'].min()
+    max_visita = df['data_ultima_visita'].max()
+
     # Filtro 3: Data de Última Visita (Range)
-    min_visita = df['data_ultima_visita'].min().to_pydatetime()
-    max_visita = df['data_ultima_visita'].max().to_pydatetime()
     data_visita_range = st.sidebar.date_input(
         "Período de Última Visita:",
         value=(min_visita, max_visita),
@@ -70,9 +63,11 @@ try:
         max_value=max_visita
     )
 
+    # Definindo limites para o filtro de compra
+    min_compra = df['data_ultima_compra'].min()
+    max_compra = df['data_ultima_compra'].max()
+
     # Filtro 4: Data de Última Compra (Range)
-    min_compra = df['data_ultima_compra'].min().to_pydatetime()
-    max_compra = df['data_ultima_compra'].max().to_pydatetime()
     data_compra_range = st.sidebar.date_input(
         "Período de Última Compra:",
         value=(min_compra, max_compra),
@@ -81,24 +76,25 @@ try:
     )
 
     # 4. Aplicando os Filtros
-    # Filtro de texto/categoria
+    # Filtro de Categoria e Setor
     mask = (df['categoria'].isin(categorias_selecionadas)) & (df['setor'].isin(setores_selecionados))
 
-    # Filtro de datas (garantindo que o usuário selecionou o range completo [início, fim])
-    if len(data_visita_range) == 2:
-        mask &= (df['data_ultima_visita'].dt.date >= data_visita_range[0]) & (df['data_ultima_visita'].dt.date <= data_visita_range[1])
+    # Filtro de Datas (Proteção para quando o usuário seleciona apenas uma data no range)
+    if isinstance(data_visita_range, tuple) and len(data_visita_range) == 2:
+        mask &= (df['data_ultima_visita'] >= data_visita_range[0]) & (df['data_ultima_visita'] <= data_visita_range[1])
     
-    if len(data_compra_range) == 2:
-        mask &= (df['data_ultima_compra'].dt.date >= data_compra_range[0]) & (df['data_ultima_compra'].dt.date <= data_compra_range[1])
+    if isinstance(data_compra_range, tuple) and len(data_compra_range) == 2:
+        mask &= (df['data_ultima_compra'] >= data_compra_range[0]) & (df['data_ultima_compra'] <= data_compra_range[1])
 
     df_filtrado = df[mask]
 
-    # 5. Exibição de Métricas (Quantidade Unique member_pk)
+    # 5. Exibição de Métricas
     qtd_unique_members = df_filtrado['member_pk'].nunique()
     
     col1, col2 = st.columns(2)
+    # Formatação brasileira para números (ponto para milhar)
     col1.metric("Membros Únicos (member_pk)", f"{qtd_unique_members:,}".replace(",", "."))
-    col2.metric("Total de Registros", f"{len(df_filtrado):,}".replace(",", "."))
+    col2.metric("Total de Registros Exibidos", f"{len(df_filtrado):,}".replace(",", "."))
 
     # 6. Área Central: Exibição dos Resultados
     st.subheader("📊 Visualização dos Dados")
@@ -116,6 +112,6 @@ try:
     )
 
 except FileNotFoundError:
-    st.error("Arquivo 'dataset.csv' não encontrado. Certifique-se de que ele está na raiz do seu repositório no GitHub.")
+    st.error("Erro: O arquivo 'dataset.csv' não foi encontrado no seu GitHub.")
 except Exception as e:
-    st.error(f"Ocorreu um erro: {e}")
+    st.error(f"Ocorreu um erro inesperado: {e}")

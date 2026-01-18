@@ -44,7 +44,6 @@ caminho_arquivo = get_dataset()
 con = get_connection()
 
 if caminho_arquivo:
-    # Cria tabela temporária no DuckDB
     con.execute(f"CREATE OR REPLACE TABLE clientes AS SELECT * FROM read_parquet('{caminho_arquivo}')")
     st.title("🚀 Exportador de Dados - 7 Milhões de Clientes")
 
@@ -68,26 +67,31 @@ if caminho_arquivo:
     min_visita, max_visita = con.execute("SELECT MIN(data_ultima_visita), MAX(data_ultima_visita) FROM clientes").fetchone()
     min_compra, max_compra = con.execute("SELECT MIN(data_ultima_compra), MAX(data_ultima_compra) FROM clientes").fetchone()
 
+    # session_state para última visita
     if "date_visita" not in st.session_state:
         st.session_state.date_visita = [min_visita, max_visita]
-    # Última compra **não selecionada por default**
+
+    # session_state para última compra (não selecionado por default)
     if "date_compra" not in st.session_state:
         st.session_state.date_compra = []
 
+    # --- Widgets de date_input
     date_visita_range = st.sidebar.date_input(
         "Período da última visita",
         value=st.session_state.date_visita,
         key="date_visita_input"
     )
 
+    # Para última compra: se vazio, deixa vazio; se selecionado, deve ser lista [start, end]
     date_compra_range = st.sidebar.date_input(
-        "Período da última compra",
+        "Período da última compra (range)",
         value=st.session_state.date_compra if st.session_state.date_compra else None,
         key="date_compra_input"
     )
 
+    # Atualiza session_state
     st.session_state.date_visita = date_visita_range
-    st.session_state.date_compra = date_compra_range
+    st.session_state.date_compra = date_compra_range if date_compra_range else []
 
     # --- opção somente member_pk
     only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
@@ -151,12 +155,12 @@ if caminho_arquivo:
                 tmp_path = tmp_file.name
                 tmp_file.close()
 
+                df_export = con.execute(query).df()
+
                 if export_format.startswith("Excel"):
-                    df_export = con.execute(query).df()
                     df_export.to_excel(tmp_path, index=False)
                     mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 else:  # CSV
-                    df_export = con.execute(query).df()
                     df_export.to_csv(tmp_path, index=False)
                     mime_type = "text/csv"
 

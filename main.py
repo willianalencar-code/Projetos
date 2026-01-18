@@ -53,136 +53,138 @@ if caminho_arquivo:
     # ==========================================
     st.sidebar.header("🔍 Filtros Dinâmicos")
     
-    # --- Session state inicial ---
-    if 'id_busca' not in st.session_state:
-        st.session_state.id_busca = ""
-    if 'cat_sel' not in st.session_state:
-        st.session_state.cat_sel = []
-    if 'setor_sel' not in st.session_state:
-        st.session_state.setor_sel = []
-    if 'date_visita_range' not in st.session_state:
-        min_data_visita = con.execute("SELECT MIN(data_ultima_visita) FROM clientes").fetchone()[0]
-        max_data_visita = con.execute("SELECT MAX(data_ultima_visita) FROM clientes").fetchone()[0]
-        st.session_state.date_visita_range = [min_data_visita, max_data_visita]
-    if 'date_compra_range' not in st.session_state:
-        min_data_compra = con.execute("SELECT MIN(data_ultima_compra) FROM clientes").fetchone()[0]
-        max_data_compra = con.execute("SELECT MAX(data_ultima_compra) FROM clientes").fetchone()[0]
-        st.session_state.date_compra_range = [min_data_compra, max_data_compra]
-
-    # --- Widgets usando session_state ---
-    st.session_state.id_busca = st.sidebar.text_input(
+    # --- Widgets usando session_state com key ---
+    id_busca = st.sidebar.text_input(
         "Buscar por member_pk:",
-        value=st.session_state.id_busca
+        key="id_busca"
     )
 
     categorias = con.execute("SELECT DISTINCT categoria FROM clientes WHERE categoria IS NOT NULL").df()['categoria'].tolist()
-    st.session_state.cat_sel = st.sidebar.multiselect(
+    cat_sel = st.sidebar.multiselect(
         "Categorias:",
         categorias,
-        default=st.session_state.cat_sel
+        key="cat_sel"
     )
 
     setores = con.execute("SELECT DISTINCT setor FROM clientes WHERE setor IS NOT NULL").df()['setor'].tolist()
-    st.session_state.setor_sel = st.sidebar.multiselect(
+    setor_sel = st.sidebar.multiselect(
         "Setores:",
         setores,
-        default=st.session_state.setor_sel
+        key="setor_sel"
     )
 
-    st.session_state.date_visita_range = st.sidebar.date_input(
+    # Para date_input, precisamos lidar de forma diferente
+    min_data_visita = con.execute("SELECT MIN(data_ultima_visita) FROM clientes").fetchone()[0]
+    max_data_visita = con.execute("SELECT MAX(data_ultima_visita) FROM clientes").fetchone()[0]
+    
+    min_data_compra = con.execute("SELECT MIN(data_ultima_compra) FROM clientes").fetchone()[0]
+    max_data_compra = con.execute("SELECT MAX(data_ultima_compra) FROM clientes").fetchone()[0]
+
+    # Use session_state para manter os valores dos date_input
+    if "date_visita" not in st.session_state:
+        st.session_state.date_visita = [min_data_visita, max_data_visita]
+    if "date_compra" not in st.session_state:
+        st.session_state.date_compra = [min_data_compra, max_data_compra]
+
+    date_visita_range = st.sidebar.date_input(
         "Período da última visita",
-        value=st.session_state.date_visita_range
+        value=st.session_state.date_visita,
+        key="date_visita_input"
     )
-
-    st.session_state.date_compra_range = st.sidebar.date_input(
+    
+    date_compra_range = st.sidebar.date_input(
         "Período da última compra",
-        value=st.session_state.date_compra_range
+        value=st.session_state.date_compra,
+        key="date_compra_input"
     )
 
     # ==========================================
-    # 5. BOTÃO PARA APLICAR FILTROS
+    # 5. QUERY E EXIBIÇÃO DOS RESULTADOS
     # ==========================================
-    if st.sidebar.button("Aplicar Filtros"):
-        # --- Monta query dinâmica ---
-        query = "SELECT * FROM clientes WHERE 1=1"
+    # --- Monta query dinâmica ---
+    query = "SELECT * FROM clientes WHERE 1=1"
 
-        if st.session_state.id_busca:
-            query += f" AND CAST(member_pk AS VARCHAR) LIKE '%{st.session_state.id_busca}%'"
+    if id_busca:
+        query += f" AND CAST(member_pk AS VARCHAR) LIKE '%{id_busca}%'"
 
-        if st.session_state.cat_sel:
-            placeholders = ', '.join([f"'{c}'" for c in st.session_state.cat_sel])
-            query += f" AND categoria IN ({placeholders})"
+    if cat_sel:
+        placeholders = ', '.join([f"'{c}'" for c in cat_sel])
+        query += f" AND categoria IN ({placeholders})"
 
-        if st.session_state.setor_sel:
-            placeholders = ', '.join([f"'{s}'" for s in st.session_state.setor_sel])
-            query += f" AND setor IN ({placeholders})"
+    if setor_sel:
+        placeholders = ', '.join([f"'{s}'" for s in setor_sel])
+        query += f" AND setor IN ({placeholders})"
 
-        if len(st.session_state.date_visita_range) == 2:
-            start, end = st.session_state.date_visita_range
-            query += f" AND data_ultima_visita BETWEEN '{start}' AND '{end}'"
+    if len(date_visita_range) == 2:
+        start, end = date_visita_range
+        query += f" AND data_ultima_visita BETWEEN '{start}' AND '{end}'"
+        # Atualiza session_state
+        st.session_state.date_visita = date_visita_range
 
-        if len(st.session_state.date_compra_range) == 2:
-            start, end = st.session_state.date_compra_range
-            query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
+    if len(date_compra_range) == 2:
+        start, end = date_compra_range
+        query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
+        # Atualiza session_state
+        st.session_state.date_compra = date_compra_range
 
-        # --- Processamento ---
-        with st.spinner("Processando filtros..."):
-            total = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
-            total_unicos = con.execute(f"SELECT COUNT(DISTINCT member_pk) FROM ({query})").fetchone()[0]
+    # --- Processamento ---
+    with st.spinner("Processando filtros..."):
+        total = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
+        total_unicos = con.execute(f"SELECT COUNT(DISTINCT member_pk) FROM ({query})").fetchone()[0]
 
-            df_result = con.execute(query + " LIMIT 1000").df()
-            for col in ['data_ultima_visita', 'data_ultima_compra']:
-                if col in df_result.columns:
-                    df_result[col] = pd.to_datetime(df_result[col], errors='coerce')
+        df_result = con.execute(query + " LIMIT 1000").df()
+        for col in ['data_ultima_visita', 'data_ultima_compra']:
+            if col in df_result.columns:
+                df_result[col] = pd.to_datetime(df_result[col], errors='coerce')
 
-        # --- Métricas ---
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total de Registros", f"{total:,}")
-        c2.metric("Clientes Únicos", f"{total_unicos:,}")
-        c3.metric("Base de Dados", "Hugging Face (Private)")
+    # --- Métricas ---
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total de Registros", f"{total:,}")
+    c2.metric("Clientes Únicos", f"{total_unicos:,}")
+    c3.metric("Base de Dados", "Hugging Face (Private)")
 
-        # --- Gráficos ---
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("Volume por Setor")
-            df_graf_setor = con.execute(f"""
-                SELECT setor, COUNT(*) AS total
-                FROM ({query})
-                GROUP BY setor
-                ORDER BY total DESC
-                LIMIT 10
-            """).df()
-            if not df_graf_setor.empty:
-                chart = alt.Chart(df_graf_setor).mark_bar().encode(
-                    x=alt.X('setor', sort='-y'),
-                    y='total',
-                    tooltip=['setor', 'total']
-                )
-                st.altair_chart(chart, use_container_width=True)
+    # --- Gráficos ---
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.subheader("Volume por Setor")
+        df_graf_setor = con.execute(f"""
+            SELECT setor, COUNT(*) AS total
+            FROM ({query})
+            GROUP BY setor
+            ORDER BY total DESC
+            LIMIT 10
+        """).df()
+        if not df_graf_setor.empty:
+            chart = alt.Chart(df_graf_setor).mark_bar().encode(
+                x=alt.X('setor', sort='-y'),
+                y='total',
+                tooltip=['setor', 'total']
+            )
+            st.altair_chart(chart, use_container_width=True)
 
-        with col_b:
-            st.subheader("Volume por Categoria")
-            df_graf_cat = con.execute(f"""
-                SELECT categoria, COUNT(*) AS total
-                FROM ({query})
-                GROUP BY categoria
-                ORDER BY total DESC
-            """).df()
-            if not df_graf_cat.empty:
-                chart = alt.Chart(df_graf_cat).mark_bar().encode(
-                    x=alt.X('categoria', sort='-y'),
-                    y='total',
-                    tooltip=['categoria', 'total']
-                )
-                st.altair_chart(chart, use_container_width=True)
+    with col_b:
+        st.subheader("Volume por Categoria")
+        df_graf_cat = con.execute(f"""
+            SELECT categoria, COUNT(*) AS total
+            FROM ({query})
+            GROUP BY categoria
+            ORDER BY total DESC
+        """).df()
+        if not df_graf_cat.empty:
+            chart = alt.Chart(df_graf_cat).mark_bar().encode(
+                x=alt.X('categoria', sort='-y'),
+                y='total',
+                tooltip=['categoria', 'total']
+            )
+            st.altair_chart(chart, use_container_width=True)
 
-        # --- Tabela ---
-        st.subheader("📋 Detalhes da Amostra (1.000 linhas)")
-        st.dataframe(df_result, use_container_width=True)
+    # --- Tabela ---
+    st.subheader("📋 Detalhes da Amostra (1.000 linhas)")
+    st.dataframe(df_result, use_container_width=True)
 
-        # --- Exportação CSV ---
-        csv = df_result.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Exportar Amostra CSV", csv, "segmentacao.csv", "text/csv")
+    # --- Exportação CSV ---
+    csv = df_result.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Exportar Amostra CSV", csv, "segmentacao.csv", "text/csv")
 
 else:
     st.warning("Aguardando configuração do Token nos Secrets do Streamlit Cloud.")

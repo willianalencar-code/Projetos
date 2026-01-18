@@ -14,19 +14,31 @@ st.set_page_config(
 # ================================
 # TOKEN E AUTENTICAÇÃO SEGURA
 # ================================
-HF_TOKEN = "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"
+# Token via secrets do Streamlit (MELHOR PRÁTICA)
+HF_TOKEN = st.secrets.get("HF_TOKEN") if "HF_TOKEN" in st.secrets else None
 
 def realizar_login():
     """Garante que o login seja feito apenas uma vez para evitar bloqueios."""
     if "autenticado" not in st.session_state:
         try:
-            # Verifica se já existe uma sessão ativa
-            whoami(token=HF_TOKEN)
-            st.session_state.autenticado = True
-        except:
+            if HF_TOKEN:
+                # Verifica se já existe uma sessão ativa
+                whoami(token=HF_TOKEN)
+                st.session_state.autenticado = True
+                st.sidebar.success("✅ Autenticado no Hugging Face")
+            else:
+                st.error("Token do Hugging Face não configurado!")
+                st.info("Adicione seu token em `.streamlit/secrets.toml`")
+                st.stop()
+        except Exception as e:
             # Se não houver, realiza o login
-            login(token=HF_TOKEN)
-            st.session_state.autenticado = True
+            if HF_TOKEN:
+                login(token=HF_TOKEN)
+                st.session_state.autenticado = True
+                st.sidebar.success("✅ Login realizado com sucesso")
+            else:
+                st.error(f"Erro de autenticação: {e}")
+                st.stop()
 
 # ================================
 # FUNÇÃO PARA CARREGAR DADOS
@@ -35,11 +47,16 @@ def realizar_login():
 def carregar_dados():
     realizar_login()
     
+    if not HF_TOKEN:
+        st.error("Token não disponível")
+        return pd.DataFrame()
+    
     # Carrega o dataset especificando o token para evitar erros de permissão
     ds = load_dataset(
         "WillianAlencar/SegmentacaoClientes",
         split="train",
-        token=HF_TOKEN
+        token=HF_TOKEN,
+        use_auth_token=True
     )
 
     df = ds.to_pandas()
@@ -60,6 +77,10 @@ def carregar_dados():
 # ================================
 try:
     df = carregar_dados()
+    
+    if df.empty:
+        st.warning("Nenhum dado carregado. Verifique a autenticação.")
+        st.stop()
 
     st.title("📂 Sistema Profissional de Filtro e Exportação")
 
@@ -77,6 +98,7 @@ try:
     # --- SIDEBAR: FILTROS ---
     st.sidebar.header("🔎 Parâmetros de Filtro")
 
+    # Filtros básicos
     categorias = st.sidebar.multiselect(
         "Selecione a Categoria",
         options=sorted(df["categoria"].dropna().unique()),
@@ -98,15 +120,25 @@ try:
     # --- DATAS ---
     st.sidebar.subheader("📅 Filtros Temporais")
     
-    # Data de Visita (Widget retorna date, comparamos com dt.date)
+    # Data de Visita
     min_v, max_v = df["data_ultima_visita"].min().date(), df["data_ultima_visita"].max().date()
-    data_visita = st.sidebar.date_input("Período de Última Visita", value=(min_v, max_v))
+    data_visita = st.sidebar.date_input(
+        "Período de Última Visita", 
+        value=(min_v, max_v),
+        min_value=min_v,
+        max_value=max_v
+    )
 
-    # Data de Compra
+    # Data de Compra (apenas para quem já comprou)
     df_c = df[df["data_ultima_compra"].notna()]
     if not df_c.empty:
         min_c, max_c = df_c["data_ultima_compra"].min().date(), df_c["data_ultima_compra"].max().date()
-        data_compra = st.sidebar.date_input("Período de Última Compra", value=(min_c, max_c))
+        data_compra = st.sidebar.date_input(
+            "Período de Última Compra (apenas compradores)",
+            value=(min_c, max_c),
+            min_value=min_c,
+            max_value=max_c
+        )
     else:
         data_compra = None
 
@@ -115,21 +147,31 @@ try:
     # ================================
     
     # Filtro Primário (Categorias, Setores, Status e Visita)
-    mask_base = (
-        (df["categoria"].isin(categorias)) &
-        (df["setor"].isin(setores)) &
-        (df["status_compra"].isin(status_sel)) &
-        (df["data_ultima_visita"].dt.date.between(*data_visita))
-    )
+    if isinstance(data_visita, tuple) and len(data_visita) == 2:
+        mask_base = (
+            (df["categoria"].isin(categorias)) &
+            (df["setor"].isin(setores)) &
+            (df["status_compra"].isin(status_sel)) &
+            (df["data_ultima_visita"].dt.date.between(*data_visita))
+        )
+    else:
+        mask_base = (
+            (df["categoria"].isin(categorias)) &
+            (df["setor"].isin(setores)) &
+            (df["status_compra"].isin(status_sel))
+        )
+    
     df_filtrado = df[mask_base].copy()
 
     # Filtro Secundário (Data de Compra aplicada apenas a quem já comprou)
-    if data_compra and "Já comprou" in status_sel:
-        mask_data_compra = (
-            (df_filtrado["data_ultima_compra"].dt.date.between(*data_compra)) |
-            (df_filtrado["status_compra"] == "Nunca comprou")
-        )
-        df_filtrado = df_filtrado[mask_data_compra]
+    if data_compra and isinstance(data_compra, tuple) and len(data_compra) == 2:
+        if "Já comprou" in status_sel and len(df_filtrado) > 0:
+            mask_data_compra = (
+                (df_filtrado["data_ultima_compra"].notna() & 
+                 df_filtrado["data_ultima_compra"].dt.date.between(*data_compra)) |
+                (df_filtrado["status_compra"] == "Nunca comprou")
+            )
+            df_filtrado = df_filtrado[mask_data_compra]
 
     # ================================
     # RESULTADOS E EXPORTAÇÃO
@@ -137,13 +179,14 @@ try:
     st.subheader(f"📊 Membros Filtrados: {len(df_filtrado)}")
     
     # Tabela principal
-    st.dataframe(
-        df_filtrado.reset_index(drop=True), 
-        use_container_width=True
-    )
-
-    # Botão para Download
     if not df_filtrado.empty:
+        st.dataframe(
+            df_filtrado.reset_index(drop=True), 
+            use_container_width=True,
+            height=400
+        )
+
+        # Botão para Download
         csv = df_filtrado.to_csv(index=False).encode('utf-8')
         st.download_button(
             label="📥 Exportar Base Filtrada (CSV)",
@@ -155,5 +198,5 @@ try:
         st.warning("Nenhum dado encontrado para os filtros selecionados.")
 
 except Exception as e:
-    st.error(f"❌ Ocorreu um erro: {e}")
+    st.error(f"❌ Ocorreu um erro: {str(e)}")
     st.info("Aguarde alguns minutos se o erro for de limite de requisições (Rate Limit).")

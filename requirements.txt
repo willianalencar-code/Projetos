@@ -1,25 +1,6 @@
-# Streamlit para interface web
-streamlit>=1.25.0,<2.0
-
-# Pandas para manipulação de dados
-pandas>=2.1.0,<2.2
-
-# Plotly para gráficos interativos
-plotly>=6.0.0,<7.0
-
-# Datasets da Hugging Face para carregar datasets
-datasets>=2.15.0,<3.0
-
-# Hugging Face Hub para autenticação e gerenciamento de modelos
-huggingface_hub>=1.26.0,<2.0
-
-# PyArrow necessário para datasets e manipulação de parquet
-pyarrow>=12.0.0,<13.0
-
-# Rich é usado internamente pelo Streamlit para renderização
-rich>=14.2.0,<15.0
-
-# Dependências do markdown usadas pelo Streamlit
-markdown-it-py>=4.0.0,<5.0
-mdurl>=0.1.2,<0.2
-pygments>=2.19.2,<3.0
+streamlit>=1.25.0
+pandas>=2.1.0
+datasets>=2.15.0
+pyarrow>=12.0.0
+huggingface_hub>=1.26.0
+plotly>=6.0.0

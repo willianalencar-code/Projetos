@@ -2,19 +2,25 @@ import streamlit as st
 import duckdb
 from huggingface_hub import hf_hub_download
 import pandas as pd
+import altair as alt
 
 # ==========================================
-# 1. CONFIGURAÇÕES DA PÁGINA
+# 1. CONFIGURAÇÃO DA PÁGINA
 # ==========================================
-st.set_page_config(page_title="Sistema de Clientes 7M", layout="wide", page_icon="📊")
+st.set_page_config(
+    page_title="Sistema de Clientes 7M",
+    layout="wide",
+    page_icon="📊"
+)
 
-@st.cache_resource
+# ==========================================
+# 2. CACHE E CONEXÃO
+# ==========================================
+@st.cache_data(show_spinner=False)
 def get_dataset():
     """Baixa o arquivo do HF para o cache local"""
     try:
-        # Puxa o token do segredo configurado no Streamlit Cloud
         token = st.secrets["HF_TOKEN"]
-        
         caminho_local = hf_hub_download(
             repo_id="WillianAlencar/SegmentacaoClientes",
             filename="data/train-00000-of-00001.parquet",
@@ -26,41 +32,41 @@ def get_dataset():
         st.error(f"Erro de conexão com o Hugging Face: {e}")
         return None
 
-@st.cache_resource
-def get_connection(path):
-    """Cria a conexão DuckDB e a VIEW com as suas colunas"""
+@st.cache_resource(show_spinner=False)
+def get_connection():
+    """Cria a conexão DuckDB em memória"""
     con = duckdb.connect(database=':memory:')
-    con.execute(f"CREATE VIEW clientes AS SELECT * FROM read_parquet('{path}')")
     return con
 
 # ==========================================
-# 2. INICIALIZAÇÃO
+# 3. INICIALIZAÇÃO
 # ==========================================
 caminho_arquivo = get_dataset()
+con = get_connection()
 
 if caminho_arquivo:
-    con = get_connection(caminho_arquivo)
+    # Criar ou recriar tabela temporária
+    con.execute(f"CREATE OR REPLACE TABLE clientes AS SELECT * FROM read_parquet('{caminho_arquivo}')")
     
     st.title("📊 Gestão de Clientes - 7 Milhões")
     
     # ==========================================
-    # 3. SIDEBAR - FILTROS REAIS
+    # 4. SIDEBAR - FILTROS DINÂMICOS
     # ==========================================
-    st.sidebar.header("🔍 Filtros")
+    st.sidebar.header("🔍 Filtros Dinâmicos")
     
-    # Filtro por member_pk (Busca exata ou parcial)
+    # Filtro por member_pk (partial match)
     id_busca = st.sidebar.text_input("Buscar por member_pk:")
     
-    # Filtro dinâmico por Categoria
-    categorias_df = con.execute("SELECT DISTINCT categoria FROM clientes WHERE categoria IS NOT NULL").df()
-    cat_sel = st.sidebar.multiselect("Categorias:", categorias_df['categoria'].unique())
+    # Filtros por Categoria e Setor
+    categorias = con.execute("SELECT DISTINCT categoria FROM clientes WHERE categoria IS NOT NULL").df()['categoria'].tolist()
+    cat_sel = st.sidebar.multiselect("Categorias:", categorias)
     
-    # Filtro dinâmico por Setor
-    setores_df = con.execute("SELECT DISTINCT setor FROM clientes WHERE setor IS NOT NULL").df()
-    setor_sel = st.sidebar.multiselect("Setores:", setores_df['setor'].unique())
-
+    setores = con.execute("SELECT DISTINCT setor FROM clientes WHERE setor IS NOT NULL").df()['setor'].tolist()
+    setor_sel = st.sidebar.multiselect("Setores:", setores)
+    
     # ==========================================
-    # 4. CONSTRUÇÃO DA QUERY SQL
+    # 5. QUERY DINÂMICA COM FILTROS
     # ==========================================
     query = "SELECT * FROM clientes WHERE 1=1"
     
@@ -68,53 +74,86 @@ if caminho_arquivo:
         query += f" AND CAST(member_pk AS VARCHAR) LIKE '%{id_busca}%'"
     
     if cat_sel:
-        query += f" AND categoria IN {tuple(cat_sel) if len(cat_sel) > 1 else f'({repr(cat_sel[0])})'}"
-        
+        cat_tuple = tuple(cat_sel)
+        if len(cat_tuple) == 1:
+            query += f" AND categoria = '{cat_tuple[0]}'"
+        else:
+            query += f" AND categoria IN {cat_tuple}"
+    
     if setor_sel:
-        query += f" AND setor IN {tuple(setor_sel) if len(setor_sel) > 1 else f'({repr(setor_sel[0])})'}"
-
+        setor_tuple = tuple(setor_sel)
+        if len(setor_tuple) == 1:
+            query += f" AND setor = '{setor_tuple[0]}'"
+        else:
+            query += f" AND setor IN {setor_tuple}"
+    
     # ==========================================
-    # 5. PROCESSAMENTO E MÉTRICAS
+    # 6. PROCESSAMENTO E MÉTRICAS
     # ==========================================
-    with st.spinner('Processando milhões de linhas...'):
-        # Contagem total rápida
-        total = con.execute(f"SELECT count(*) FROM ({query})").fetchone()[0]
+    with st.spinner('Processando dados...'):
+        # Contagem total de registros filtrados
+        total = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
+        total_unicos = con.execute(f"SELECT COUNT(DISTINCT member_pk) FROM ({query})").fetchone()[0]
         
-        # Amostra de dados
+        # Amostra limitada para exibição
         df_result = con.execute(query + " LIMIT 1000").df()
         
-        # Converter colunas de data para formato legível no Pandas
-        for col in ['data_ultima_visitadata_ultima_compra']: # Se estiverem juntas como string, ou separadas
-             if col in df_result.columns:
-                 df_result[col] = pd.to_datetime(df_result[col], errors='coerce')
-
-    # Exibição de Métricas
-    c1, c2 = st.columns(2)
-    c1.metric("Clientes Encontrados", f"{total:,}")
-    c2.metric("Base de Dados", "Hugging Face (Private)")
-
+        # Converter colunas de data
+        for col in ['data_ultima_visita', 'data_ultima_compra']:
+            if col in df_result.columns:
+                df_result[col] = pd.to_datetime(df_result[col], errors='coerce')
+    
+    # Exibição de métricas
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total de Registros", f"{total:,}")
+    c2.metric("Clientes Únicos", f"{total_unicos:,}")
+    c3.metric("Base de Dados", "Hugging Face (Private)")
+    
     # ==========================================
-    # 6. GRÁFICOS ANALÍTICOS
+    # 7. GRÁFICOS INTERATIVOS
     # ==========================================
     col_a, col_b = st.columns(2)
     
     with col_a:
         st.subheader("Volume por Setor")
-        df_graf_setor = con.execute(f"SELECT setor, count(*) as total FROM ({query}) GROUP BY setor ORDER BY total DESC LIMIT 10").df()
-        st.bar_chart(df_graf_setor.set_index('setor'))
-        
+        df_graf_setor = con.execute(f"""
+            SELECT setor, COUNT(*) AS total
+            FROM ({query})
+            GROUP BY setor
+            ORDER BY total DESC
+            LIMIT 10
+        """).df()
+        if not df_graf_setor.empty:
+            chart = alt.Chart(df_graf_setor).mark_bar().encode(
+                x=alt.X('setor', sort='-y'),
+                y='total',
+                tooltip=['setor', 'total']
+            )
+            st.altair_chart(chart, use_container_width=True)
+    
     with col_b:
         st.subheader("Volume por Categoria")
-        df_graf_cat = con.execute(f"SELECT categoria, count(*) as total FROM ({query}) GROUP BY categoria").df()
-        st.pie_chart(df_graf_cat, values='total', names='categoria')
-
+        df_graf_cat = con.execute(f"""
+            SELECT categoria, COUNT(*) AS total
+            FROM ({query})
+            GROUP BY categoria
+            ORDER BY total DESC
+        """).df()
+        if not df_graf_cat.empty:
+            chart = alt.Chart(df_graf_cat).mark_bar().encode(
+                x=alt.X('categoria', sort='-y'),
+                y='total',
+                tooltip=['categoria', 'total']
+            )
+            st.altair_chart(chart, use_container_width=True)
+    
     # ==========================================
-    # 7. TABELA FINAL
+    # 8. TABELA DETALHADA
     # ==========================================
-    st.subheader("📋 Detalhes (Amostra 1.000)")
+    st.subheader("📋 Detalhes da Amostra (1.000 linhas)")
     st.dataframe(df_result, use_container_width=True)
-
-    # Exportação
+    
+    # Exportação CSV
     csv = df_result.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Exportar Amostra CSV", csv, "segmentacao.csv", "text/csv")
 

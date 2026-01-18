@@ -110,7 +110,7 @@ if caminho_arquivo:
     # ==========================================
     query = "SELECT * FROM clientes WHERE 1=1"
     if id_busca:
-        query += f" AND CAST(member_pk AS VARCHAR)  '{id_busca}'"
+        query += f" AND CAST(member_pk AS VARCHAR) = '{id_busca}'"
     if cat_sel:
         query += f" AND categoria IN ({', '.join([f'\'{c}\'' for c in cat_sel])})"
     if setor_sel:

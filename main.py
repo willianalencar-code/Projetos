@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from datasets import load_dataset
 
 # ================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -10,17 +11,23 @@ st.set_page_config(
 )
 
 # ================================
-# URL DO CSV NO HUGGING FACE
+# TOKEN HUGGING FACE
 # ================================
-# Você precisa pegar o CSV bruto do seu dataset no Hugging Face
-HF_CSV_URL = "https://huggingface.co/datasets/WillianAlencar/SegmentacaoClientes/resolve/main/train.csv"
+HF_TOKEN = "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"
 
 # ================================
 # CARGA DE DADOS
 # ================================
 @st.cache_data(show_spinner="Carregando dataset...")
 def carregar_dados():
-    df = pd.read_csv(HF_CSV_URL)
+    # Carrega dataset privado da Hugging Face
+    ds = load_dataset(
+        "WillianAlencar/SegmentacaoClientes",
+        split="train",
+        token=HF_TOKEN
+    )
+
+    df = ds.to_pandas()
 
     # Conversão de datas
     df["data_ultima_visita"] = pd.to_datetime(df["data_ultima_visita"], errors="coerce")

@@ -247,4 +247,73 @@ if caminho_arquivo:
                     file_data = f.read()
                 os.unlink(tmp_path)
                 
-                st.success(f"✅ Exportação concluída! Arquivo: {file_si_
+                st.success(f"✅ Exportação concluída! Arquivo: {file_size:.2f} MB")
+                
+                # Botão de download
+                filename = f"clientes_{export_mode.split()[0].lower()}_{timestamp}.{file_ext}"
+                st.download_button(
+                    label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
+                    data=file_data,
+                    file_name=filename,
+                    mime=mime_type,
+                    use_container_width=True,
+                    type="primary"
+                )
+                
+                # Estatísticas
+                with st.expander("📊 Estatísticas da Exportação"):
+                    col_stat1, col_stat2, col_stat3 = st.columns(3)
+                    with col_stat1:
+                        st.metric("Registros Exportados", f"{estimated_rows:,}")
+                    with col_stat2:
+                        st.metric("Tamanho do Arquivo", f"{file_size:.2f} MB")
+                    with col_stat3:
+                        compression_ratio = (estimated_rows * 100) / (file_size * 1024 * 1024) if file_size > 0 else 0
+                        st.metric("Taxa Compressão", f"{compression_ratio:.1f} bytes/registro")
+                
+            except Exception as e:
+                st.error(f"❌ Erro durante exportação: {str(e)}")
+                with st.expander("🛠️ Soluções possíveis"):
+                    st.markdown("""
+                    **Se a exportação falhou:**
+                    1. **Tente exportar em partes menores** - Use a opção "Dividir em partes"
+                    2. **Use formato Parquet** - É mais eficiente que CSV
+                    3. **Exporte apenas uma amostra** - 100K registros primeiro
+                    4. **Verifique sua conexão** - 7M registros exigem boa conexão
+                    5. **Tente novamente em alguns minutos** - Pode ser congestionamento temporário
+                    """)
+    
+    # ==========================================
+    # DICAS
+    # ==========================================
+    with st.expander("💡 Dicas para Exportação de Grandes Volumes"):
+        st.markdown("""
+        **Para 7 milhões de registros:**
+        
+        🥇 **Parquet é o MELHOR formato:**
+        - 10x mais rápido que CSV
+        - 5x menor em tamanho
+        - Mantém tipos de dados
+        
+        ⚡ **Performance:**
+        - Exportação completa: 2-5 minutos
+        - Tamanho estimado: 200-500 MB (Parquet)
+        - Tamanho CSV: 1-2 GB
+        
+        🛡️ **Segurança:**
+        - Dados processados em memória
+        - Arquivo temporário é apagado
+        - Nenhum dado fica no servidor
+        
+        📱 **Como usar depois:**
+        ```python
+        # Para Parquet:
+        import pandas as pd
+        df = pd.read_parquet('arquivo.parquet')
+        
+        # Para CSV comprimido:
+        df = pd.read_csv('arquivo.csv.gz')
+        ```
+        """)
+else:
+    st.warning("Configure o token HF_TOKEN nos secrets do Streamlit Cloud")

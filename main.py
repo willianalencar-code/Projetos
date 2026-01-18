@@ -46,97 +46,92 @@ def carregar_dados():
 # ================================
 # CARREGAMENTO E FILTROS
 # ================================
-try:
-    df = carregar_dados()
+df = carregar_dados()
 
-    # TÍTULO E REGRAS
-    st.title("📂 Sistema Profissional de Filtro e Exportação")
-    
-    # Adicionando Métricas para facilitar a visualização
-    c1, c2, c3 = st.columns(3)
-    total_clientes = len(df)
-    ja_compraram = len(df[df["status_compra"] == "Já comprou"])
-    
-    c1.metric("Total de Clientes", total_clientes)
-    c2.metric("Já Compraram", ja_compraram)
-    c3.metric("Nunca Compraram", total_clientes - ja_compraram)
+# TÍTULO E REGRAS
+st.title("📂 Sistema Profissional de Filtro e Exportação")
 
-    st.markdown("---")
+# Adicionando Métricas para facilitar a visualização
+c1, c2, c3 = st.columns(3)
+total_clientes = len(df)
+ja_compraram = len(df[df["status_compra"] == "Já comprou"])
 
-    # ================================
-    # SIDEBAR - FILTROS
-    # ================================
-    st.sidebar.header("🔎 Filtros")
+c1.metric("Total de Clientes", total_clientes)
+c2.metric("Já Compraram", ja_compraram)
+c3.metric("Nunca Compraram", total_clientes - ja_compraram)
 
-    categorias = st.sidebar.multiselect(
-        "Categoria",
-        options=sorted(df["categoria"].dropna().unique()),
-        default=sorted(df["categoria"].dropna().unique())
+st.markdown("---")
+
+# ================================
+# SIDEBAR - FILTROS
+# ================================
+st.sidebar.header("🔎 Filtros")
+
+categorias = st.sidebar.multiselect(
+    "Categoria",
+    options=sorted(df["categoria"].dropna().unique()),
+    default=sorted(df["categoria"].dropna().unique())
+)
+
+setores = st.sidebar.multiselect(
+    "Setor",
+    options=sorted(df["setor"].dropna().unique()),
+    default=sorted(df["setor"].dropna().unique())
+)
+
+status_sel = st.sidebar.multiselect(
+    "Status de Compra",
+    options=["Nunca comprou", "Já comprou"],
+    default=["Nunca comprou", "Já comprou"]
+)
+
+# ================================
+# FILTROS DE DATA
+# ================================
+st.sidebar.subheader("📅 Datas")
+
+data_visita = st.sidebar.date_input(
+    "Período da Última Visita",
+    value=(df["data_ultima_visita"].min(), df["data_ultima_visita"].max())
+)
+
+df_com_compra = df[df["data_ultima_compra"].notna()]
+if not df_com_compra.empty:
+    data_compra = st.sidebar.date_input(
+        "Período da Última Compra",
+        value=(df_com_compra["data_ultima_compra"].min(), df_com_compra["data_ultima_compra"].max())
     )
+else:
+    data_compra = None
 
-    setores = st.sidebar.multiselect(
-        "Setor",
-        options=sorted(df["setor"].dropna().unique()),
-        default=sorted(df["setor"].dropna().unique())
-    )
+# ================================
+# APLICAÇÃO DOS FILTROS
+# ================================
+# Filtro base
+df_filtrado = df[
+    (df["categoria"].isin(categorias)) &
+    (df["setor"].isin(setores)) &
+    (df["status_compra"].isin(status_sel)) &
+    (df["data_ultima_visita"].dt.date.between(*data_visita))
+]
 
-    status_sel = st.sidebar.multiselect(
-        "Status de Compra",
-        options=["Nunca comprou", "Já comprou"],
-        default=["Nunca comprou", "Já comprou"]
-    )
+# Filtro de data de compra (se houver seleção e clientes que compraram)
+if data_compra and "Já comprou" in status_sel:
+    mask_compra = df_filtrado["data_ultima_compra"].dt.date.between(*data_compra)
+    mask_nunca = df_filtrado["status_compra"] == "Nunca comprou"
+    df_filtrado = df_filtrado[mask_compra | mask_nunca]
 
-    # ================================
-    # FILTROS DE DATA
-    # ================================
-    st.sidebar.subheader("📅 Datas")
+# ================================
+# TABELA FINAL E EXPORTAÇÃO
+# ================================
+st.subheader(f"📊 Membros Filtrados ({len(df_filtrado)})")
+st.dataframe(df_filtrado.reset_index(drop=True), use_container_width=True)
 
-    data_visita = st.sidebar.date_input(
-        "Período da Última Visita",
-        value=(df["data_ultima_visita"].min(), df["data_ultima_visita"].max())
-    )
-
-    df_com_compra = df[df["data_ultima_compra"].notna()]
-    if not df_com_compra.empty:
-        data_compra = st.sidebar.date_input(
-            "Período da Última Compra",
-            value=(df_com_compra["data_ultima_compra"].min(), df_com_compra["data_ultima_compra"].max())
-        )
-    else:
-        data_compra = None
-
-    # ================================
-    # APLICAÇÃO DOS FILTROS
-    # ================================
-    # Filtro base
-    df_filtrado = df[
-        (df["categoria"].isin(categorias)) &
-        (df["setor"].isin(setores)) &
-        (df["status_compra"].isin(status_sel)) &
-        (df["data_ultima_visita"].dt.date.between(*data_visita))
-    ]
-
-    # Filtro de data de compra (se houver seleção e clientes que compraram)
-    if data_compra and "Já comprou" in status_sel:
-        mask_compra = df_filtrado["data_ultima_compra"].dt.date.between(*data_compra)
-        mask_nunca = df_filtrado["status_compra"] == "Nunca comprou"
-        df_filtrado = df_filtrado[mask_compra | mask_nunca]
-
-    # ================================
-    # TABELA FINAL E EXPORTAÇÃO
-    # ================================
-    st.subheader(f"📊 Membros Filtrados ({len(df_filtrado)})")
-    st.dataframe(df_filtrado.reset_index(drop=True), use_container_width=True)
-
-    # Botão de Download
-    csv = df_filtrado.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Baixar Dados Filtrados (CSV)",
-        data=csv,
-        file_name='membros_filtrados.csv',
-        mime='text/csv',
-    )
-
-except Exception as e:
-    st.error(f"❌ Erro ao carregar os dados: {e}")
-    st.info("Verifique se o Token do Hugging Face tem permissão de LEITURA (READ) para este dataset.")
+# Botão de Download
+csv = df_filtrado.to_csv(index=False).encode('utf-8')
+st.download_button(
+    label="📥 Baixar Dados Filtrados (CSV)",
+    data=csv,
+    file_name='membros_filtrados.csv',
+    mime='text/csv',
+)

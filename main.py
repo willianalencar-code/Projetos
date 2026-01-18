@@ -45,7 +45,7 @@ con = get_connection()
 
 if caminho_arquivo:
     con.execute(f"CREATE OR REPLACE TABLE clientes AS SELECT * FROM read_parquet('{caminho_arquivo}')")
-    st.title("🚀 Exportador de Dados - 7 Milhões de Clientes")
+    st.title("📋 Gestão e Exportação de Clientes")
 
     # ==========================================
     # SIDEBAR - FILTROS
@@ -133,8 +133,7 @@ if caminho_arquivo:
     col1, col2, col3 = st.columns(3)
     col1.metric("Total de registros", f"{total:,}")
     col2.metric("Clientes únicos (member_pk)", f"{total_unicos:,}")
-    col3.metric("Base de dados", "Hugging Face")
-
+    
     # ==========================================
     # PRÉ-VISUALIZAÇÃO
     # ==========================================

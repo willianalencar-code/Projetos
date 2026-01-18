@@ -3,6 +3,7 @@ import duckdb
 from huggingface_hub import hf_hub_download
 import pandas as pd
 import altair as alt
+import io
 
 # ==========================================
 # 1. CONFIGURAÇÃO DA PÁGINA
@@ -49,7 +50,7 @@ if caminho_arquivo:
     st.title("📊 Gestão de Clientes - 7 Milhões")
     
     # ==========================================
-    # 4. SIDEBAR - FILTROS
+    # 4. SIDEBAR - FILTROS E EXPORTAÇÃO
     # ==========================================
     st.sidebar.header("🔍 Filtros Dinâmicos")
     
@@ -97,9 +98,36 @@ if caminho_arquivo:
         value=st.session_state.date_compra,
         key="date_compra_input"
     )
-
+    
     # ==========================================
-    # 5. QUERY E EXIBIÇÃO DOS RESULTADOS
+    # 5. NOVA SEÇÃO: EXPORTAÇÃO COMPLETA
+    # ==========================================
+    st.sidebar.header("📤 Exportação de Dados")
+    
+    # Opções de exportação
+    export_option = st.sidebar.radio(
+        "Escolha o que exportar:",
+        ["Amostra (1.000 linhas)", "Dados Filtrados", "Dataset Completo"],
+        key="export_option"
+    )
+    
+    # Formato de exportação
+    export_format = st.sidebar.selectbox(
+        "Formato de exportação:",
+        ["CSV", "Parquet", "Excel"],
+        key="export_format"
+    )
+    
+    # Nome do arquivo
+    default_filename = "clientes"
+    custom_filename = st.sidebar.text_input(
+        "Nome do arquivo (sem extensão):",
+        value=default_filename,
+        key="export_filename"
+    )
+    
+    # ==========================================
+    # 6. QUERY E EXIBIÇÃO DOS RESULTADOS
     # ==========================================
     # --- Monta query dinâmica ---
     query = "SELECT * FROM clientes WHERE 1=1"
@@ -131,7 +159,8 @@ if caminho_arquivo:
     with st.spinner("Processando filtros..."):
         total = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
         total_unicos = con.execute(f"SELECT COUNT(DISTINCT member_pk) FROM ({query})").fetchone()[0]
-
+        
+        # Para visualização, sempre mostra apenas 1000 linhas
         df_result = con.execute(query + " LIMIT 1000").df()
         for col in ['data_ultima_visita', 'data_ultima_compra']:
             if col in df_result.columns:
@@ -141,7 +170,14 @@ if caminho_arquivo:
     c1, c2, c3 = st.columns(3)
     c1.metric("Total de Registros", f"{total:,}")
     c2.metric("Clientes Únicos", f"{total_unicos:,}")
-    c3.metric("Base de Dados", "Hugging Face (Private)")
+    
+    # Mostrar o tipo de exportação selecionado
+    export_info = {
+        "Amostra (1.000 linhas)": "1.000 registros",
+        "Dados Filtrados": f"{total:,} registros",
+        "Dataset Completo": "7M registros (completo)"
+    }
+    c3.metric("Exportação Selecionada", export_info[export_option])
 
     # --- Gráficos ---
     col_a, col_b = st.columns(2)
@@ -181,10 +217,138 @@ if caminho_arquivo:
     # --- Tabela ---
     st.subheader("📋 Detalhes da Amostra (1.000 linhas)")
     st.dataframe(df_result, use_container_width=True)
-
-    # --- Exportação CSV ---
-    csv = df_result.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Exportar Amostra CSV", csv, "segmentacao.csv", "text/csv")
+    
+    # ==========================================
+    # 7. EXPORTAÇÃO AVANÇADA
+    # ==========================================
+    st.subheader("📤 Exportação de Dados")
+    
+    # Container para exportação
+    with st.container():
+        col_exp1, col_exp2, col_exp3 = st.columns(3)
+        
+        with col_exp1:
+            st.info(f"**Opção selecionada:** {export_option}")
+            
+        with col_exp2:
+            st.info(f"**Formato:** {export_format}")
+            
+        with col_exp3:
+            st.info(f"**Arquivo:** {custom_filename}.{export_format.lower()}")
+        
+        # Botão de exportação
+        export_button = st.button(
+            "🚀 Iniciar Exportação",
+            type="primary",
+            use_container_width=True
+        )
+        
+        if export_button:
+            with st.spinner(f"Preparando exportação de {export_option}..."):
+                try:
+                    # Determinar qual query usar baseado na opção selecionada
+                    if export_option == "Amostra (1.000 linhas)":
+                        export_query = query + " LIMIT 1000"
+                        filename_suffix = "_amostra"
+                    elif export_option == "Dados Filtrados":
+                        export_query = query
+                        filename_suffix = "_filtrado"
+                    else:  # Dataset Completo
+                        export_query = "SELECT * FROM clientes"
+                        filename_suffix = "_completo"
+                    
+                    # Executar a query
+                    df_export = con.execute(export_query).df()
+                    
+                    # Converter datas
+                    for col in ['data_ultima_visita', 'data_ultima_compra']:
+                        if col in df_export.columns:
+                            df_export[col] = pd.to_datetime(df_export[col], errors='coerce')
+                    
+                    st.success(f"✅ Dados preparados: {len(df_export):,} registros")
+                    
+                    # Preparar arquivo baseado no formato selecionado
+                    if export_format == "CSV":
+                        # Para CSV grande, usar buffer de memória
+                        csv_data = df_export.to_csv(index=False).encode('utf-8')
+                        file_extension = "csv"
+                        mime_type = "text/csv"
+                        
+                        st.download_button(
+                            label=f"📥 Baixar {export_format} ({len(df_export):,} registros)",
+                            data=csv_data,
+                            file_name=f"{custom_filename}{filename_suffix}.{file_extension}",
+                            mime=mime_type,
+                            use_container_width=True
+                        )
+                    
+                    elif export_format == "Parquet":
+                        # Parquet é mais eficiente para grandes volumes
+                        buffer = io.BytesIO()
+                        df_export.to_parquet(buffer, index=False)
+                        buffer.seek(0)
+                        file_extension = "parquet"
+                        mime_type = "application/octet-stream"
+                        
+                        st.download_button(
+                            label=f"📥 Baixar {export_format} ({len(df_export):,} registros)",
+                            data=buffer,
+                            file_name=f"{custom_filename}{filename_suffix}.{file_extension}",
+                            mime=mime_type,
+                            use_container_width=True
+                        )
+                    
+                    elif export_format == "Excel":
+                        # Para Excel, limitar a 1M linhas (limitação do Excel)
+                        max_excel_rows = 1000000
+                        if len(df_export) > max_excel_rows:
+                            st.warning(f"⚠️ Excel suporta até 1M linhas. Serão exportadas {max_excel_rows:,} linhas.")
+                            df_export = df_export.head(max_excel_rows)
+                        
+                        buffer = io.BytesIO()
+                        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                            df_export.to_excel(writer, index=False, sheet_name='Clientes')
+                        buffer.seek(0)
+                        file_extension = "xlsx"
+                        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        
+                        st.download_button(
+                            label=f"📥 Baixar {export_format} ({len(df_export):,} registros)",
+                            data=buffer,
+                            file_name=f"{custom_filename}{filename_suffix}.{file_extension}",
+                            mime=mime_type,
+                            use_container_width=True
+                        )
+                    
+                    # Informações adicionais
+                    with st.expander("📊 Estatísticas da Exportação"):
+                        st.write(f"**Total de registros exportados:** {len(df_export):,}")
+                        st.write(f"**Colunas exportadas:** {', '.join(df_export.columns.tolist())}")
+                        st.write(f"**Tamanho estimado:** {len(df_export) * 100 / 1024 / 1024:.2f} MB (aproximado)")
+                        
+                except Exception as e:
+                    st.error(f"❌ Erro durante a exportação: {str(e)}")
+    
+    # ==========================================
+    # 8. DICAS DE EXPORTAÇÃO
+    # ==========================================
+    with st.expander("💡 Dicas para Exportação"):
+        st.markdown("""
+        **Para grandes volumes de dados:**
+        1. **Parquet** é o formato mais eficiente (menor tamanho, mais rápido)
+        2. **CSV** é universal mas pode ser muito grande para 7M registros
+        3. **Excel** tem limite de ~1M linhas por planilha
+        
+        **Recomendações:**
+        - Para análise local: use **Parquet** com pandas ou DuckDB
+        - Para compartilhar: use **CSV** se for menos de 100K linhas
+        - Para relatórios: use **Excel** com filtros aplicados
+        
+        **Atenção:** A exportação do dataset completo (7M registros) pode:
+        - Demorar vários minutos
+        - Gerar arquivo de vários GBs
+        - Consumir muita memória no navegador
+        """)
 
 else:
     st.warning("Aguardando configuração do Token nos Secrets do Streamlit Cloud.")

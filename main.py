@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 from datasets import load_dataset
-import os
 
 # ================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -40,6 +39,9 @@ def carregar_dados():
 
     return df
 
+# ================================
+# CARREGAMENTO E FILTROS
+# ================================
 try:
     df = carregar_dados()
 
@@ -47,7 +49,6 @@ try:
     # HEADER
     # ================================
     st.title("📂 Sistema Profissional de Filtro e Exportação")
-
     st.markdown(
         """
         **Regras de Negócio**
@@ -115,4 +116,31 @@ try:
     else:
         data_compra = None
 
-    # =================
+    # ================================
+    # APLICAÇÃO DOS FILTROS
+    # ================================
+    df_filtrado = df[
+        (df["categoria"].isin(categorias)) &
+        (df["setor"].isin(setores)) &
+        (df["status_compra"].isin(status_compra))
+    ]
+
+    # Filtro por datas
+    df_filtrado = df_filtrado[
+        (df_filtrado["data_ultima_visita"].between(data_visita[0], data_visita[1]))
+    ]
+
+    if data_compra:
+        df_filtrado = df_filtrado[
+            (df_filtrado["data_ultima_compra"].between(data_compra[0], data_compra[1]))
+            | (df_filtrado["status_compra"] == "Nunca comprou")
+        ]
+
+    # ================================
+    # TABELA FINAL
+    # ================================
+    st.subheader(f"📊 Membros Filtrados ({len(df_filtrado)})")
+    st.dataframe(df_filtrado.reset_index(drop=True))
+
+except Exception as e:
+    st.error(f"❌ Erro ao carregar os dados: {e}")

@@ -23,7 +23,7 @@ def get_dataset():
         
         # O hf_hub_download precisa do token para repositórios privados
         caminho_local = hf_hub_download(
-            repo_id="WillianAlencar/SegmentacaoClientes/data",
+            repo_id="WillianAlencar/SegmentacaoClientes/data/",
             filename="train-00000-of-00001.parquet",
             repo_type="dataset",
             token=token_hf  # <--- Garanta que esta linha está aqui

@@ -19,7 +19,7 @@ def get_dataset():
         return None
         
     try:
-        token_hf = st.secrets["HF_TOKEN"]
+        token_hf = "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"
         
         # O hf_hub_download precisa do token para repositórios privados
         caminho_local = hf_hub_download(

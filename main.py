@@ -14,31 +14,33 @@ st.set_page_config(
 # ================================
 # TOKEN E AUTENTICAÇÃO SEGURA
 # ================================
-# Token via secrets do Streamlit (MELHOR PRÁTICA)
+# IMPORTANTE: O token agora vem do secrets.toml
 HF_TOKEN = st.secrets.get("HF_TOKEN") if "HF_TOKEN" in st.secrets else None
 
 def realizar_login():
-    """Garante que o login seja feito apenas uma vez para evitar bloqueios."""
+    """Garante que o login seja feito apenas uma vez."""
     if "autenticado" not in st.session_state:
         try:
             if HF_TOKEN:
-                # Verifica se já existe uma sessão ativa
+                # Verifica autenticação
                 whoami(token=HF_TOKEN)
                 st.session_state.autenticado = True
-                st.sidebar.success("✅ Autenticado no Hugging Face")
+                st.sidebar.success("✅ Autenticado")
             else:
-                st.error("Token do Hugging Face não configurado!")
-                st.info("Adicione seu token em `.streamlit/secrets.toml`")
+                st.error("⚠️ Token não configurado!")
+                st.info("""
+                **Como configurar:**
+                1. Crie um arquivo `.streamlit/secrets.toml`
+                2. Adicione: `HF_TOKEN = "seu_token_aqui"`
+                3. Obtenha o token em: https://huggingface.co/settings/tokens
+                """)
                 st.stop()
-        except Exception as e:
-            # Se não houver, realiza o login
+        except Exception:
+            # Realiza login se necessário
             if HF_TOKEN:
                 login(token=HF_TOKEN)
                 st.session_state.autenticado = True
-                st.sidebar.success("✅ Login realizado com sucesso")
-            else:
-                st.error(f"Erro de autenticação: {e}")
-                st.stop()
+                st.sidebar.success("✅ Login realizado")
 
 # ================================
 # FUNÇÃO PARA CARREGAR DADOS

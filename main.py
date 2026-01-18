@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from datasets import load_dataset
 
 # ================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -11,28 +10,23 @@ st.set_page_config(
 )
 
 # ================================
-# TOKEN HUGGING FACE (DIRETO NO CÓDIGO)
+# URL DO CSV NO HUGGING FACE
 # ================================
-HF_TOKEN = "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"
+# Você precisa pegar o CSV bruto do seu dataset no Hugging Face
+HF_CSV_URL = "https://huggingface.co/datasets/WillianAlencar/SegmentacaoClientes/resolve/main/train.csv"
 
 # ================================
-# CARGA DE DADOS (HUGGING FACE)
+# CARGA DE DADOS
 # ================================
 @st.cache_data(show_spinner="Carregando dataset...")
 def carregar_dados():
-    ds = load_dataset(
-        "WillianAlencar/SegmentacaoClientes",
-        split="train",
-        token=HF_TOKEN
-    )
-
-    df = ds.to_pandas()
+    df = pd.read_csv(HF_CSV_URL)
 
     # Conversão de datas
     df["data_ultima_visita"] = pd.to_datetime(df["data_ultima_visita"], errors="coerce")
     df["data_ultima_compra"] = pd.to_datetime(df["data_ultima_compra"], errors="coerce")
 
-    # Criação de STATUS DE COMPRA (REGRA DE NEGÓCIO)
+    # Criação de STATUS DE COMPRA
     df["status_compra"] = df["data_ultima_compra"].isna().map(
         {True: "Nunca comprou", False: "Já comprou"}
     )

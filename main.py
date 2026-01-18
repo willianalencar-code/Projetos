@@ -1,237 +1,145 @@
 import streamlit as st
+import duckdb
+from huggingface_hub import hf_hub_download
 import pandas as pd
-import requests
-import json
-import io
 
-# ================================
-# CONFIGURAÇÃO
-# ================================
+# ==========================================
+# 1. CONFIGURAÇÕES DA PÁGINA
+# ==========================================
 st.set_page_config(
-    page_title="Sistema de Clientes",
-    layout="wide"
+    page_title="Sistema de Clientes 7M", 
+    layout="wide",
+    page_icon="📊"
 )
 
-st.title("📊 Sistema de Clientes")
-
-# ================================
-# VERIFICAÇÃO DO TOKEN
-# ================================
-st.sidebar.header("Configuração")
-
-# Verificar token
-try:
-    HF_TOKEN = st.secrets["HF_TOKEN"]
-    token_preview = HF_TOKEN[:8] + "..." + HF_TOKEN[-4:] if len(HF_TOKEN) > 12 else "***"
-    st.sidebar.success(f"✅ Token: {token_preview}")
-except:
-    HF_TOKEN = None
-    st.sidebar.error("❌ Token não configurado")
-    st.sidebar.info("Configure em `.streamlit/secrets.toml`")
-
-# ================================
-# MÉTODO ALTERNATIVO - VIA API
-# ================================
-def carregar_dados_api():
-    """Carrega dados diretamente da API do Hugging Face"""
-    if not HF_TOKEN:
-        return None
-    
+@st.cache_resource
+def get_dataset():
+    """Baixa o arquivo do HF para o cache local e retorna o caminho"""
     try:
-        # URL do dataset no Hugging Face
-        dataset_url = "https://datasets-server.huggingface.co/rows"
-        params = {
-            "dataset": "WillianAlencar/SegmentacaoClientes",
-            "config": "default",
-            "split": "train",
-            "offset": 0,
-            "length": 100  # Limite inicial
-        }
+        # Puxa o token do arquivo .streamlit/secrets.toml
+        token = st.secrets["HF_TOKEN"]
         
-        headers = {
-            "Authorization": f"Bearer {HF_TOKEN}"
-        }
-        
-        st.info("Conectando ao Hugging Face...")
-        
-        response = requests.get(dataset_url, params=params, headers=headers, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            if "rows" in data:
-                # Converter para DataFrame
-                rows = []
-                for row in data["rows"]:
-                    rows.append(row["row"])
-                
-                df = pd.DataFrame(rows)
-                st.success(f"✅ {len(df)} registros carregados")
-                return df
-            else:
-                st.error("Formato de resposta inesperado")
-                return None
-        else:
-            st.error(f"Erro HTTP {response.status_code}")
-            return None
-            
+        caminho_local = hf_hub_download(
+            repo_id="WillianAlencar/SegmentacaoClientes",
+            filename="data/train-00000-of-00001.parquet",
+            repo_type="dataset",
+            token=token
+        )
+        return caminho_local
     except Exception as e:
-        st.error(f"Erro na API: {str(e)}")
+        st.error(f"Erro ao acessar Hugging Face: {e}")
         return None
 
-# ================================
-# MÉTODO SIMPLES - TESTE
-# ================================
-def carregar_dados_simples():
-    """Carrega dados de exemplo se a API falhar"""
-    st.warning("Usando dados de exemplo...")
-    
-    # Dados de exemplo
-    data = {
-        "nome": ["Cliente A", "Cliente B", "Cliente C", "Cliente D"],
-        "categoria": ["VIP", "Regular", "VIP", "Regular"],
-        "setor": ["Tecnologia", "Comércio", "Serviços", "Tecnologia"],
-        "data_ultima_visita": ["2024-01-15", "2024-01-10", "2024-01-05", "2024-01-20"],
-        "data_ultima_compra": ["2024-01-10", None, "2024-01-03", None],
-        "valor_gasto": [1500, 500, 2000, 0]
-    }
-    
-    df = pd.DataFrame(data)
-    
-    # Converter datas
-    for col in ["data_ultima_visita", "data_ultima_compra"]:
-        df[col] = pd.to_datetime(df[col], errors='coerce')
-    
-    # Status de compra
-    df["status_compra"] = df["data_ultima_compra"].apply(
-        lambda x: "Já comprou" if pd.notna(x) else "Nunca comprou"
-    )
-    
-    return df
+@st.cache_resource
+def get_connection(path):
+    """Cria a conexão com DuckDB e uma VIEW para facilitar o SQL"""
+    con = duckdb.connect(database=':memory:')
+    # Criamos uma VIEW chamada 'clientes' para não ter que repetir o caminho do arquivo
+    con.execute(f"CREATE VIEW clientes AS SELECT * FROM read_parquet('{path}')")
+    return con
 
-# ================================
-# INTERFACE PRINCIPAL
-# ================================
-# Botões para diferentes métodos
-st.sidebar.subheader("Opções de Carregamento")
+# ==========================================
+# 2. INICIALIZAÇÃO DOS DADOS
+# ==========================================
+caminho_arquivo = get_dataset()
 
-opcao = st.sidebar.radio(
-    "Escolha o método:",
-    ["API Hugging Face", "Dados de Exemplo"]
-)
+if caminho_arquivo:
+    con = get_connection(caminho_arquivo)
+    
+    st.title("📊 Painel Analítico de Clientes")
+    st.caption("Processando 7 milhões de registros em tempo real com DuckDB + Parquet")
 
-# Carregar dados
-if opcao == "API Hugging Face" and HF_TOKEN:
-    with st.spinner("Carregando via API..."):
-        df = carregar_dados_api()
+    # ==========================================
+    # 3. INTERFACE LATERAL (FILTROS)
+    # ==========================================
+    st.sidebar.header("🔍 Filtros de Pesquisa")
+    
+    nome_busca = st.sidebar.text_input("Buscar por Nome:")
+    
+    # Carregar categorias únicas para o filtro usando SQL (muito rápido)
+    categorias_df = con.execute("SELECT DISTINCT categoria FROM clientes WHERE categoria IS NOT NULL").df()
+    cat_selecionada = st.sidebar.multiselect("Categorias:", categorias_df['categoria'].tolist())
+
+    # ==========================================
+    # 4. CONSTRUÇÃO DA CONSULTA SQL
+    # ==========================================
+    # Base da query
+    base_query = "SELECT * FROM clientes WHERE 1=1"
+    
+    if nome_busca:
+        # ILIKE para busca case-insensitive
+        base_query += f" AND nome ILIKE '%{nome_busca}%'"
+    
+    if cat_selecionada:
+        if len(cat_selecionada) == 1:
+            base_query += f" AND categoria = '{cat_selecionada[0]}'"
+        else:
+            base_query += f" AND categoria IN {tuple(cat_selecionada)}"
+
+    # ==========================================
+    # 5. EXECUÇÃO E MÉTRICAS
+    # ==========================================
+    with st.spinner('Consultando base de dados...'):
+        # Total de registros filtrados
+        total_filtrado = con.execute(f"SELECT count(*) FROM ({base_query})").fetchone()[0]
         
-        if df is None or df.empty:
-            st.error("Falha ao carregar via API. Usando dados de exemplo...")
-            df = carregar_dados_simples()
+        # Soma total de gastos (agregação pesada feita no DuckDB)
+        # Ajuste o nome da coluna 'valor_gasto' se for diferente no seu arquivo
+        soma_gastos = con.execute(f"SELECT SUM(valor_gasto) FROM ({base_query})").fetchone()[0] or 0
+        
+        # Amostra para exibir na tabela
+        df_exibicao = con.execute(base_query + " LIMIT 1000").df()
+
+    # Exibição de Métricas
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Clientes Encontrados", f"{total_filtrado:,}")
+    m2.metric("Volume Financeiro", f"R$ {soma_gastos:,.2f}")
+    m3.metric("Motor de Dados", "DuckDB ⚡")
+
+    st.divider()
+
+    # ==========================================
+    # 6. GRÁFICOS E ANÁLISES
+    # ==========================================
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        st.subheader("Top 10 Setores")
+        df_setor = con.execute(f"""
+            SELECT setor, COUNT(*) as qtd 
+            FROM ({base_query}) 
+            GROUP BY setor 
+            ORDER BY qtd DESC 
+            LIMIT 10
+        """).df()
+        if not df_setor.empty:
+            st.bar_chart(df_setor.set_index('setor'))
+        else:
+            st.info("Sem dados para exibir o gráfico.")
+
+    with col_right:
+        st.subheader("Maiores Compradores (Top 10)")
+        df_top_compradores = con.execute(f"""
+            SELECT nome, valor_gasto 
+            FROM ({base_query}) 
+            ORDER BY valor_gasto DESC 
+            LIMIT 10
+        """).df()
+        st.dataframe(df_top_compradores, use_container_width=True)
+
+    # ==========================================
+    # 7. TABELA DE DADOS E DOWNLOAD
+    # ==========================================
+    st.subheader("📋 Detalhes dos Registros (Amostra de 1.000)")
+    st.dataframe(df_exibicao, use_container_width=True, height=350)
+
+    if not df_exibicao.empty:
+        csv = df_exibicao.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Baixar Amostra Filtrada (CSV)",
+            data=csv,
+            file_name="clientes_filtrados.csv",
+            mime="text/csv"
+        )
 else:
-    df = carregar_dados_simples()
-
-# Se ainda não temos dados
-if df is None or df.empty:
-    st.error("Não foi possível carregar dados.")
-    
-    # Mostrar ajuda
-    with st.expander("🔧 Solução de Problemas", expanded=True):
-        st.markdown("""
-        ### Problemas comuns:
-        
-        1. **Token inválido ou expirado**
-           - Gere novo token em: https://huggingface.co/settings/tokens
-           - Permissão: "Read"
-        
-        2. **Dataset não acessível**
-           - Verifique se o dataset existe: https://huggingface.co/datasets/WillianAlencar/SegmentacaoClientes
-        
-        3. **Problemas de conexão**
-           - Verifique firewall/proxy
-        
-        ### Configuração rápida:
-        ```toml
-        # .streamlit/secrets.toml
-        HF_TOKEN = "hf_seu_token_aqui"
-        ```
-        """)
-    
-    st.stop()
-
-# ================================
-# EXIBIR DADOS
-# ================================
-st.success(f"✅ Dados carregados: {len(df)} registros")
-
-# Visualizar
-with st.expander("📋 Visualizar dados", expanded=True):
-    st.dataframe(df, use_container_width=True)
-
-# Estatísticas
-st.subheader("📈 Estatísticas")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric("Total", len(df))
-
-with col2:
-    if "status_compra" in df.columns:
-        compradores = len(df[df["status_compra"] == "Já comprou"])
-        st.metric("Já Compraram", compradores)
-
-with col3:
-    if "status_compra" in df.columns:
-        nunca = len(df[df["status_compra"] == "Nunca comprou"])
-        st.metric("Nunca Compraram", nunca)
-
-# ================================
-# FILTROS SIMPLES
-# ================================
-st.sidebar.header("🔍 Filtros")
-
-if "categoria" in df.columns:
-    categorias = st.sidebar.multiselect(
-        "Categoria",
-        options=sorted(df["categoria"].unique()),
-        default=sorted(df["categoria"].unique())
-    )
-else:
-    categorias = []
-
-if "setor" in df.columns:
-    setores = st.sidebar.multiselect(
-        "Setor",
-        options=sorted(df["setor"].unique()),
-        default=sorted(df["setor"].unique())
-    )
-else:
-    setores = []
-
-# Aplicar filtros
-df_filtrado = df.copy()
-
-if categorias:
-    df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categorias)]
-
-if setores:
-    df_filtrado = df_filtrado[df_filtrado["setor"].isin(setores)]
-
-# ================================
-# RESULTADOS
-# ================================
-st.subheader(f"📊 Resultados Filtrados: {len(df_filtrado)}")
-
-if not df_filtrado.empty:
-    st.dataframe(df_filtrado, use_container_width=True, height=300)
-    
-    # Download
-    csv = df_filtrado.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        "📥 Exportar CSV",
-        data=csv,
-        file_name="clientes.csv",
-        mime="text/csv"
-    )
-else:
-    st.warning("Nenhum resultado com os filtros selecionados")
+    st.error("Não foi possível carregar os dados. Verifique seu Token e o nome do repositório.")

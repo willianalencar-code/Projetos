@@ -4,13 +4,37 @@ from datasets import load_dataset
 from huggingface_hub import login, whoami
 
 # ================================
+# SOLUÇÃO PARA O BUG DO STREAMLIT
+# ================================
+import warnings
+warnings.filterwarnings("ignore")
+
+# Configuração para evitar o erro de removeChild
+st.set_option('deprecation.showfileUploaderEncoding', False)
+st.set_option('deprecation.showPyplotGlobalUse', False)
+
+# ================================
 # CONFIGURAÇÃO DA PÁGINA
 # ================================
 st.set_page_config(
     page_title="Sistema de Filtro e Exportação de Membros",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"  # Adicione esta linha
 )
 
+# Adicione um container principal
+main_container = st.container()
+
+with main_container:
+    # ================================
+    # TOKEN E AUTENTICAÇÃO SEGURA
+    # ================================
+    # Use try-except para capturar erros de secrets
+    try:
+        HF_TOKEN = st.secrets["HF_TOKEN"]
+    except (KeyError, FileNotFoundError):
+        HF_TOKEN = None
+        st.warning("⚠️ Token do Hugging Face não configurado")    
 # ================================
 # TOKEN E AUTENTICAÇÃO SEGURA
 # ================================

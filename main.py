@@ -21,7 +21,7 @@ def get_dataset():
         
         caminho_local = hf_hub_download(
             repo_id="WillianAlencar/SegmentacaoClientes",
-            filename="data/train-00000-of-00001.parquet",
+            filename="data/train-00000-of-00001.parquet", # O 'data/' é essencial
             repo_type="dataset",
             token=token
         )

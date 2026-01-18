@@ -3,3 +3,5 @@ pandas
 plotly
 datasets
 os
+huggingface_hub
+pyarrow

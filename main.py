@@ -73,8 +73,8 @@ if caminho_arquivo:
 
     # session_state para última compra
     if "date_compra" not in st.session_state:
-        st.session_state.date_compra = [min_compra, max_compra]
-        st.session_state.date_compra_selected = False  # não filtrando por default
+        st.session_state.date_compra = None  # inicial vazio
+        st.session_state.date_compra_selected = False
 
     # Widget para última visita
     date_visita_range = st.sidebar.date_input(
@@ -83,16 +83,17 @@ if caminho_arquivo:
         key="date_visita_input"
     )
 
-    # Widget para última compra como range
+    # Widget para última compra (desmarcado por default)
     date_compra_range = st.sidebar.date_input(
         "Período da última compra",
-        value=st.session_state.date_compra if st.session_state.date_compra_selected else [min_compra, max_compra],
+        value=st.session_state.date_compra,
         key="date_compra_input"
     )
 
     # Atualiza session_state
     st.session_state.date_visita = date_visita_range
-    if date_compra_range != [min_compra, max_compra]:
+    if date_compra_range:
+        # Se o usuário selecionou um range, marca como selecionado
         st.session_state.date_compra_selected = True
         st.session_state.date_compra = date_compra_range
     else:
@@ -116,7 +117,7 @@ if caminho_arquivo:
         query += f" AND setor IN ({', '.join([f'\'{s}\'' for s in setor_sel])})"
     if len(date_visita_range) == 2:
         query += f" AND data_ultima_visita BETWEEN '{date_visita_range[0]}' AND '{date_visita_range[1]}'"
-    if st.session_state.date_compra_selected and len(st.session_state.date_compra) == 2:
+    if st.session_state.date_compra_selected and st.session_state.date_compra and len(st.session_state.date_compra) == 2:
         start, end = st.session_state.date_compra
         query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
 

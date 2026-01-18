@@ -38,27 +38,13 @@ def get_connection():
     return duckdb.connect(database=':memory:')
 
 # ==========================================
-# EXPORTAÇÃO EM CHUNKS
-# ==========================================
-def export_chunked(con, query, chunk_size=500000):
-    total_count = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
-    num_chunks = (total_count // chunk_size) + (1 if total_count % chunk_size > 0 else 0)
-    results = []
-    for i in range(num_chunks):
-        offset = i * chunk_size
-        chunk_query = f"SELECT * FROM ({query}) LIMIT {chunk_size} OFFSET {offset}"
-        df_chunk = con.execute(chunk_query).df()
-        results.append(df_chunk)
-        st.progress((i+1)/num_chunks, text=f"Processando chunk {i+1}/{num_chunks}")
-    return pd.concat(results, ignore_index=True) if results else pd.DataFrame()
-
-# ==========================================
 # INICIALIZAÇÃO
 # ==========================================
 caminho_arquivo = get_dataset()
 con = get_connection()
 
 if caminho_arquivo:
+    # Cria tabela temporária no DuckDB
     con.execute(f"CREATE OR REPLACE TABLE clientes AS SELECT * FROM read_parquet('{caminho_arquivo}')")
     st.title("🚀 Exportador de Dados - 7 Milhões de Clientes")
 
@@ -84,11 +70,21 @@ if caminho_arquivo:
 
     if "date_visita" not in st.session_state:
         st.session_state.date_visita = [min_visita, max_visita]
+    # Última compra **não selecionada por default**
     if "date_compra" not in st.session_state:
-        st.session_state.date_compra = [min_compra, max_compra]
+        st.session_state.date_compra = []
 
-    date_visita_range = st.sidebar.date_input("Período da última visita", value=st.session_state.date_visita, key="date_visita_input")
-    date_compra_range = st.sidebar.date_input("Período da última compra", value=st.session_state.date_compra, key="date_compra_input")
+    date_visita_range = st.sidebar.date_input(
+        "Período da última visita",
+        value=st.session_state.date_visita,
+        key="date_visita_input"
+    )
+
+    date_compra_range = st.sidebar.date_input(
+        "Período da última compra",
+        value=st.session_state.date_compra if st.session_state.date_compra else None,
+        key="date_compra_input"
+    )
 
     st.session_state.date_visita = date_visita_range
     st.session_state.date_compra = date_compra_range
@@ -96,12 +92,8 @@ if caminho_arquivo:
     # --- opção somente member_pk
     only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
 
-    # --- formato e chunking
-    export_format = st.sidebar.selectbox("Formato:", ["Parquet (Recomendado)", "CSV", "JSON"])
-    use_chunks = st.sidebar.checkbox("Dividir em partes", value=True)
-    if use_chunks:
-        chunk_size = st.sidebar.select_slider("Registros por chunk:", options=[100000, 250000, 500000, 1000000], value=500000)
-    compress = st.sidebar.checkbox("Comprimir arquivo (CSV/JSON)", value=True)
+    # --- formato (Excel e CSV apenas)
+    export_format = st.sidebar.selectbox("Formato:", ["Excel (.xlsx)", "CSV"])
 
     # ==========================================
     # MONTAR QUERY
@@ -115,7 +107,7 @@ if caminho_arquivo:
         query += f" AND setor IN ({', '.join([f'\'{s}\'' for s in setor_sel])})"
     if len(date_visita_range) == 2:
         query += f" AND data_ultima_visita BETWEEN '{date_visita_range[0]}' AND '{date_visita_range[1]}'"
-    if len(date_compra_range) == 2:
+    if date_compra_range and len(date_compra_range) == 2:
         query += f" AND data_ultima_compra BETWEEN '{date_compra_range[0]}' AND '{date_compra_range[1]}'"
 
     if only_member_pk:
@@ -133,11 +125,21 @@ if caminho_arquivo:
     col3.metric("Base de dados", "Hugging Face")
 
     # ==========================================
+    # PRÉ-VISUALIZAÇÃO
+    # ==========================================
+    st.subheader("📋 Pré-visualização (100 linhas)")
+    df_preview = con.execute(query + " LIMIT 100").df()
+    for col in ['data_ultima_visita', 'data_ultima_compra']:
+        if col in df_preview.columns:
+            df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce')
+    st.dataframe(df_preview, use_container_width=True)
+
+    # ==========================================
     # EXPORTAÇÃO
     # ==========================================
     st.header("📤 Exportação")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_ext_preview = export_format.split()[0].lower()
+    file_ext_preview = "xlsx" if export_format.startswith("Excel") else "csv"
     file_name_preview = f"clientes_{timestamp}.{file_ext_preview}"
     st.info(f"Nome do arquivo que será gerado: **{file_name_preview}**")
     st.info(f"Total estimado para exportação: {total:,} registros")
@@ -149,45 +151,25 @@ if caminho_arquivo:
                 tmp_path = tmp_file.name
                 tmp_file.close()
 
-                if export_format == "Parquet (Recomendado)":
-                    con.execute(f"COPY ({query}) TO '{tmp_path}' (FORMAT PARQUET)")
-                    mime_type = "application/octet-stream"
-                    file_ext = "parquet"
-                elif export_format == "CSV":
-                    if compress:
-                        con.execute(f"COPY ({query}) TO '{tmp_path}' (FORMAT CSV, HEADER true, COMPRESSION GZIP)")
-                        file_ext = "csv.gz"
-                        mime_type = "application/gzip"
-                    else:
-                        con.execute(f"COPY ({query}) TO '{tmp_path}' (FORMAT CSV, HEADER true)")
-                        file_ext = "csv"
-                        mime_type = "text/csv"
-                elif export_format == "JSON":
-                    if use_chunks and total > chunk_size:
-                        df_export = export_chunked(con, query, chunk_size)
-                    else:
-                        df_export = con.execute(query).df()
-                    if compress:
-                        df_export.to_json(tmp_path, orient='records', lines=True, compression='gzip')
-                        file_ext = "json.gz"
-                        mime_type = "application/gzip"
-                    else:
-                        df_export.to_json(tmp_path, orient='records', lines=True)
-                        file_ext = "json"
-                        mime_type = "application/json"
+                if export_format.startswith("Excel"):
+                    df_export = con.execute(query).df()
+                    df_export.to_excel(tmp_path, index=False)
+                    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                else:  # CSV
+                    df_export = con.execute(query).df()
+                    df_export.to_csv(tmp_path, index=False)
+                    mime_type = "text/csv"
 
-                # Ler e disponibilizar para download
                 file_size = os.path.getsize(tmp_path) / (1024*1024)
                 with open(tmp_path, 'rb') as f:
                     file_data = f.read()
                 os.unlink(tmp_path)
 
                 st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
-                filename = f"clientes_{timestamp}.{file_ext}"
                 st.download_button(
                     label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
                     data=file_data,
-                    file_name=filename,
+                    file_name=file_name_preview,
                     mime=mime_type,
                     use_container_width=True
                 )

@@ -145,13 +145,27 @@ if caminho_arquivo:
     if export_mode == "💡 Amostra Rápida":
         base_query = "SELECT * FROM clientes LIMIT 100000"
         estimated_rows = 100000
+        
     elif export_mode == "📊 Dados Filtrados":
         base_query = "SELECT * FROM clientes WHERE 1=1"
+        
+        # Adicionar filtros de categoria (CORRIGIDO)
         if cat_sel:
-            base_query += f" AND categoria IN ({','.join([f\"'{c}'\" for c in cat_sel])})"
+            # Formatar valores para a query SQL
+            cat_values = ", ".join([f"'{c}'" for c in cat_sel])
+            base_query += f" AND categoria IN ({cat_values})"
+        
+        # Adicionar filtros de setor (CORRIGIDO)
         if setor_sel:
-            base_query += f" AND setor IN ({','.join([f\"'{s}'\" for s in setor_sel])})"
-        estimated_rows = con.execute(f"SELECT COUNT(*) FROM ({base_query})").fetchone()[0]
+            setor_values = ", ".join([f"'{s}'" for s in setor_sel])
+            base_query += f" AND setor IN ({setor_values})"
+        
+        # Estimar número de registros
+        try:
+            estimated_rows = con.execute(f"SELECT COUNT(*) FROM ({base_query})").fetchone()[0]
+        except:
+            estimated_rows = con.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
+            
     else:  # Dataset Completo
         base_query = "SELECT * FROM clientes"
         estimated_rows = total_clientes

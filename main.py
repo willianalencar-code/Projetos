@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datasets import load_dataset
-from huggingface_hub import login
+from huggingface_hub import login, whoami
 
 # ================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -12,36 +12,43 @@ st.set_page_config(
 )
 
 # ================================
-# TOKEN HUGGING FACE
+# TOKEN E AUTENTICAÇÃO SEGURA
 # ================================
-# No Streamlit Cloud, vá em Settings > Secrets e adicione: HF_TOKEN = "seu_token"
-# O código abaixo tenta pegar dos Secrets, se não achar, usa a string direta.
-try:
-    HF_TOKEN = st.secrets["HF_TOKEN"]
-except:
-    HF_TOKEN = "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"
+HF_TOKEN = "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"
+
+def realizar_login():
+    """Garante que o login seja feito apenas uma vez para evitar bloqueios."""
+    if "autenticado" not in st.session_state:
+        try:
+            # Verifica se já existe uma sessão ativa
+            whoami(token=HF_TOKEN)
+            st.session_state.autenticado = True
+        except:
+            # Se não houver, realiza o login
+            login(token=HF_TOKEN)
+            st.session_state.autenticado = True
 
 # ================================
 # FUNÇÃO PARA CARREGAR DADOS
 # ================================
-@st.cache_data(show_spinner="Autenticando e carregando dataset...")
+@st.cache_data(show_spinner="Carregando base de dados do Hugging Face...")
 def carregar_dados():
-    # Realiza o login no Hugging Face (essencial para datasets privados)
-    login(token=HF_TOKEN)
+    realizar_login()
     
-    # Carrega o dataset do Hub
+    # Carrega o dataset especificando o token para evitar erros de permissão
     ds = load_dataset(
         "WillianAlencar/SegmentacaoClientes",
-        split="train"
+        split="train",
+        token=HF_TOKEN
     )
 
     df = ds.to_pandas()
 
-    # Conversão de datas: garante que sejam objetos datetime do Pandas
+    # Conversão de colunas para datetime
     for col in ["data_ultima_visita", "data_ultima_compra"]:
         df[col] = pd.to_datetime(df[col], errors="coerce")
 
-    # Criação do Status de compra
+    # Identificação de status de compra
     df["status_compra"] = df["data_ultima_compra"].isna().map(
         {True: "Nunca comprou", False: "Já comprou"}
     )
@@ -49,38 +56,35 @@ def carregar_dados():
     return df
 
 # ================================
-# CARREGAMENTO DOS DADOS
+# INTERFACE E FILTROS
 # ================================
 try:
     df = carregar_dados()
 
-    # TÍTULO PRINCIPAL
     st.title("📂 Sistema Profissional de Filtro e Exportação")
 
-    # MÉTRICAS RÁPIDAS
+    # Bloco de Métricas Superiores
     c1, c2, c3 = st.columns(3)
-    total_clientes = len(df)
-    ja_compraram = len(df[df["status_compra"] == "Já comprou"])
-
-    c1.metric("Total de Clientes", total_clientes)
-    c2.metric("Já Compraram", ja_compraram)
-    c3.metric("Nunca Compraram", total_clientes - ja_compraram)
+    total = len(df)
+    compradores = len(df[df["status_compra"] == "Já comprou"])
+    
+    c1.metric("Total de Clientes", total)
+    c2.metric("Já Compraram", compradores)
+    c3.metric("Nunca Compraram", total - compradores)
 
     st.markdown("---")
 
-    # ================================
-    # SIDEBAR - FILTROS
-    # ================================
-    st.sidebar.header("🔎 Filtros de Segmentação")
+    # --- SIDEBAR: FILTROS ---
+    st.sidebar.header("🔎 Parâmetros de Filtro")
 
     categorias = st.sidebar.multiselect(
-        "Categoria",
+        "Selecione a Categoria",
         options=sorted(df["categoria"].dropna().unique()),
         default=sorted(df["categoria"].dropna().unique())
     )
 
     setores = st.sidebar.multiselect(
-        "Setor",
+        "Selecione o Setor",
         options=sorted(df["setor"].dropna().unique()),
         default=sorted(df["setor"].dropna().unique())
     )
@@ -91,81 +95,65 @@ try:
         default=["Nunca comprou", "Já comprou"]
     )
 
-    # FILTROS DE DATA
-    st.sidebar.subheader("📅 Filtros de Datas")
-
-    # Última Visita (Tratando datetime para date para o widget)
-    min_visita = df["data_ultima_visita"].min().date()
-    max_visita = df["data_ultima_visita"].max().date()
+    # --- DATAS ---
+    st.sidebar.subheader("📅 Filtros Temporais")
     
-    data_visita = st.sidebar.date_input(
-        "Período da Última Visita",
-        value=(min_visita, max_visita),
-        min_value=min_visita,
-        max_value=max_visita
-    )
+    # Data de Visita (Widget retorna date, comparamos com dt.date)
+    min_v, max_v = df["data_ultima_visita"].min().date(), df["data_ultima_visita"].max().date()
+    data_visita = st.sidebar.date_input("Período de Última Visita", value=(min_v, max_v))
 
-    # Última Compra (apenas para quem tem data)
-    df_com_compra = df[df["data_ultima_compra"].notna()]
-    if not df_com_compra.empty:
-        min_compra = df_com_compra["data_ultima_compra"].min().date()
-        max_compra = df_com_compra["data_ultima_compra"].max().date()
-        
-        data_compra_sel = st.sidebar.date_input(
-            "Período da Última Compra",
-            value=(min_compra, max_compra),
-            min_value=min_compra,
-            max_value=max_compra
-        )
+    # Data de Compra
+    df_c = df[df["data_ultima_compra"].notna()]
+    if not df_c.empty:
+        min_c, max_c = df_c["data_ultima_compra"].min().date(), df_c["data_ultima_compra"].max().date()
+        data_compra = st.sidebar.date_input("Período de Última Compra", value=(min_c, max_c))
     else:
-        data_compra_sel = None
+        data_compra = None
 
     # ================================
-    # APLICAÇÃO DOS FILTROS (LÓGICA)
+    # PROCESSAMENTO DOS FILTROS
     # ================================
     
-    # Aplicando filtros de texto e o de data de visita (usando .dt.date para comparar)
-    mask = (
+    # Filtro Primário (Categorias, Setores, Status e Visita)
+    mask_base = (
         (df["categoria"].isin(categorias)) &
         (df["setor"].isin(setores)) &
         (df["status_compra"].isin(status_sel)) &
         (df["data_ultima_visita"].dt.date.between(*data_visita))
     )
-    
-    df_filtrado = df[mask].copy()
+    df_filtrado = df[mask_base].copy()
 
-    # Aplicando filtro de data de compra se houver seleção
-    if data_compra_sel and "Já comprou" in status_sel:
-        # Mantém quem está no intervalo OU quem nunca comprou (se "Nunca comprou" estiver selecionado)
-        mask_compra = (
-            (df_filtrado["data_ultima_compra"].dt.date.between(*data_compra_sel)) |
+    # Filtro Secundário (Data de Compra aplicada apenas a quem já comprou)
+    if data_compra and "Já comprou" in status_sel:
+        mask_data_compra = (
+            (df_filtrado["data_ultima_compra"].dt.date.between(*data_compra)) |
             (df_filtrado["status_compra"] == "Nunca comprou")
         )
-        df_filtrado = df_filtrado[mask_compra]
+        df_filtrado = df_filtrado[mask_data_compra]
 
     # ================================
-    # TABELA FINAL E EXPORTAÇÃO
+    # RESULTADOS E EXPORTAÇÃO
     # ================================
-    st.subheader(f"📊 Membros Filtrados ({len(df_filtrado)})")
+    st.subheader(f"📊 Membros Filtrados: {len(df_filtrado)}")
     
-    # Exibindo a tabela
+    # Tabela principal
     st.dataframe(
         df_filtrado.reset_index(drop=True), 
         use_container_width=True
     )
 
-    # Botão de Exportação
+    # Botão para Download
     if not df_filtrado.empty:
         csv = df_filtrado.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="📥 Baixar Base Filtrada (CSV)",
+            label="📥 Exportar Base Filtrada (CSV)",
             data=csv,
-            file_name='membros_filtrados.csv',
-            mime='text/csv',
+            file_name='extracao_membros.csv',
+            mime='text/csv'
         )
     else:
-        st.warning("Nenhum membro encontrado com os filtros selecionados.")
+        st.warning("Nenhum dado encontrado para os filtros selecionados.")
 
 except Exception as e:
-    st.error(f"❌ Erro na aplicação: {e}")
-    st.info("Verifique se as bibliotecas 'datasets' e 'huggingface_hub' estão no requirements.txt")
+    st.error(f"❌ Ocorreu um erro: {e}")
+    st.info("Aguarde alguns minutos se o erro for de limite de requisições (Rate Limit).")

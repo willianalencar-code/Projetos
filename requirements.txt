@@ -1,6 +1,5 @@
 streamlit>=1.25.0
 pandas>=2.1.0
-datasets>=2.15.0
 pyarrow>=12.0.0
 huggingface_hub>=1.26.0
 plotly>=6.0.0

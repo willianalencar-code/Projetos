@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+from datasets import load_dataset
+import os
 
 # ================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -10,11 +12,22 @@ st.set_page_config(
 )
 
 # ================================
-# CARGA DE DADOS
+# TOKEN HUGGING FACE (DIRETO NO CÓDIGO)
 # ================================
-@st.cache_data
+HF_TOKEN = "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"
+
+# ================================
+# CARGA DE DADOS (HUGGING FACE)
+# ================================
+@st.cache_data(show_spinner="Carregando dataset...")
 def carregar_dados():
-    df = pd.read_csv("dataset.csv")
+    ds = load_dataset(
+        "WillianAlencar/SegmentacaoClientes",
+        split="train",
+        token=HF_TOKEN
+    )
+
+    df = ds.to_pandas()
 
     # Conversão de datas
     df["data_ultima_visita"] = pd.to_datetime(df["data_ultima_visita"], errors="coerce")
@@ -26,7 +39,6 @@ def carregar_dados():
     )
 
     return df
-
 
 try:
     df = carregar_dados()
@@ -103,105 +115,4 @@ try:
     else:
         data_compra = None
 
-    # ================================
-    # APLICAÇÃO DOS FILTROS
-    # ================================
-    mask = (
-        df["categoria"].isin(categorias)
-        & df["setor"].isin(setores)
-        & df["status_compra"].isin(status_compra)
-    )
-
-    # Filtro de visita
-    if isinstance(data_visita, tuple) and len(data_visita) == 2:
-        mask &= (
-            df["data_ultima_visita"].dt.date >= data_visita[0]
-        ) & (
-            df["data_ultima_visita"].dt.date <= data_visita[1]
-        )
-
-    # Filtro de compra (aplicado apenas a quem comprou)
-    if data_compra and isinstance(data_compra, tuple) and len(data_compra) == 2:
-        mask &= (
-            (df["data_ultima_compra"].isna()) |
-            (
-                (df["data_ultima_compra"].dt.date >= data_compra[0]) &
-                (df["data_ultima_compra"].dt.date <= data_compra[1])
-            )
-        )
-
-    df_filtrado = df[mask]
-
-    # ================================
-    # MÉTRICAS
-    # ================================
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Membros Únicos",
-        f"{df_filtrado['member_pk'].nunique():,}".replace(",", ".")
-    )
-
-    col2.metric(
-        "Total de Registros",
-        f"{len(df_filtrado):,}".replace(",", ".")
-    )
-
-    col3.metric(
-        "Já Compraram",
-        f"{(df_filtrado['status_compra'] == 'Já comprou').sum():,}".replace(",", ".")
-    )
-
-    col4.metric(
-        "Nunca Compraram",
-        f"{(df_filtrado['status_compra'] == 'Nunca comprou').sum():,}".replace(",", ".")
-    )
-
-    # ================================
-    # QUALIDADE DOS DADOS
-    # ================================
-    st.subheader("🧪 Qualidade dos Dados")
-
-    perc_sem_compra = (
-        (df_filtrado["status_compra"] == "Nunca comprou").mean() * 100
-        if len(df_filtrado) > 0 else 0
-    )
-
-    st.info(
-        f"📌 {perc_sem_compra:.1f}% dos registros filtrados **não possuem compra registrada**."
-    )
-
-    # ================================
-    # VISUALIZAÇÃO
-    # ================================
-    st.subheader("📊 Dados Filtrados")
-
-    st.dataframe(
-        df_filtrado,
-        use_container_width=True,
-        height=450
-    )
-
-    # ================================
-    # EXPORTAÇÃO
-    # ================================
-    st.divider()
-
-    st.warning(
-        f"O arquivo exportado conterá {len(df_filtrado):,} registros."
-        .replace(",", ".")
-    )
-
-    csv = df_filtrado.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        label="📥 Exportar CSV",
-        data=csv,
-        file_name="base_filtrada.csv",
-        mime="text/csv"
-    )
-
-except FileNotFoundError:
-    st.error("Arquivo dataset.csv não encontrado.")
-except Exception as e:
-    st.error(f"Erro inesperado: {e}")
+    # =================

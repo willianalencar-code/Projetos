@@ -53,7 +53,7 @@ if caminho_arquivo:
     # ==========================================
     st.sidebar.header("🔍 Filtros Dinâmicos")
     
-    # Inicializa session_state
+    # --- Session state inicial ---
     if 'id_busca' not in st.session_state:
         st.session_state.id_busca = ""
     if 'cat_sel' not in st.session_state:
@@ -69,7 +69,7 @@ if caminho_arquivo:
         max_data_compra = con.execute("SELECT MAX(data_ultima_compra) FROM clientes").fetchone()[0]
         st.session_state.date_compra_range = [min_data_compra, max_data_compra]
 
-    # Widgets
+    # --- Widgets usando session_state ---
     st.session_state.id_busca = st.sidebar.text_input(
         "Buscar por member_pk:",
         value=st.session_state.id_busca
@@ -103,7 +103,7 @@ if caminho_arquivo:
     # 5. BOTÃO PARA APLICAR FILTROS
     # ==========================================
     if st.sidebar.button("Aplicar Filtros"):
-        # Monta query dinâmica
+        # --- Monta query dinâmica ---
         query = "SELECT * FROM clientes WHERE 1=1"
 
         if st.session_state.id_busca:
@@ -125,7 +125,7 @@ if caminho_arquivo:
             start, end = st.session_state.date_compra_range
             query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
 
-        # Processamento
+        # --- Processamento ---
         with st.spinner("Processando filtros..."):
             total = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
             total_unicos = con.execute(f"SELECT COUNT(DISTINCT member_pk) FROM ({query})").fetchone()[0]
@@ -135,13 +135,13 @@ if caminho_arquivo:
                 if col in df_result.columns:
                     df_result[col] = pd.to_datetime(df_result[col], errors='coerce')
 
-        # Métricas
+        # --- Métricas ---
         c1, c2, c3 = st.columns(3)
         c1.metric("Total de Registros", f"{total:,}")
         c2.metric("Clientes Únicos", f"{total_unicos:,}")
         c3.metric("Base de Dados", "Hugging Face (Private)")
 
-        # Gráficos
+        # --- Gráficos ---
         col_a, col_b = st.columns(2)
         with col_a:
             st.subheader("Volume por Setor")
@@ -176,11 +176,11 @@ if caminho_arquivo:
                 )
                 st.altair_chart(chart, use_container_width=True)
 
-        # Tabela detalhada
+        # --- Tabela ---
         st.subheader("📋 Detalhes da Amostra (1.000 linhas)")
         st.dataframe(df_result, use_container_width=True)
 
-        # Export CSV
+        # --- Exportação CSV ---
         csv = df_result.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Exportar Amostra CSV", csv, "segmentacao.csv", "text/csv")
 

@@ -14,20 +14,24 @@ st.set_page_config(
 
 @st.cache_resource
 def get_dataset():
-    """Baixa o arquivo do HF para o cache local e retorna o caminho"""
-    try:
-        # Puxa o token do arquivo .streamlit/secrets.toml
-        token = st.secrets["HF_TOKEN"]
+    if "HF_TOKEN" not in st.secrets:
+        st.error("Token não encontrado nos Secrets!")
+        return None
         
+    try:
+        token_hf = st.secrets["HF_TOKEN"]
+        
+        # O hf_hub_download precisa do token para repositórios privados
         caminho_local = hf_hub_download(
             repo_id="WillianAlencar/SegmentacaoClientes",
-            filename="data/train-00000-of-00001.parquet", # O 'data/' é essencial
+            filename="data/train-00000-of-00001.parquet",
             repo_type="dataset",
-            token=token
+            token=token_hf  # <--- Garanta que esta linha está aqui
         )
         return caminho_local
     except Exception as e:
-        st.error(f"Erro ao acessar Hugging Face: {e}")
+        # Se der erro 401 aqui, o token nos Secrets está inválido
+        st.error(f"Erro de Autenticação: {e}")
         return None
 
 @st.cache_resource

@@ -16,11 +16,10 @@ st.set_page_config(
 HF_TOKEN = "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"
 
 # ================================
-# CARGA DE DADOS
+# FUNÇÃO PARA CARREGAR DADOS
 # ================================
 @st.cache_data(show_spinner="Carregando dataset...")
 def carregar_dados():
-    # Carrega dataset privado da Hugging Face
     ds = load_dataset(
         "WillianAlencar/SegmentacaoClientes",
         split="train",
@@ -30,10 +29,10 @@ def carregar_dados():
     df = ds.to_pandas()
 
     # Conversão de datas
-    df["data_ultima_visita"] = pd.to_datetime(df["data_ultima_visita"], errors="coerce")
-    df["data_ultima_compra"] = pd.to_datetime(df["data_ultima_compra"], errors="coerce")
+    for col in ["data_ultima_visita", "data_ultima_compra"]:
+        df[col] = pd.to_datetime(df[col], errors="coerce")
 
-    # Criação de STATUS DE COMPRA
+    # Status de compra
     df["status_compra"] = df["data_ultima_compra"].isna().map(
         {True: "Nunca comprou", False: "Já comprou"}
     )
@@ -46,9 +45,7 @@ def carregar_dados():
 try:
     df = carregar_dados()
 
-    # ================================
-    # HEADER
-    # ================================
+    # TÍTULO E REGRAS
     st.title("📂 Sistema Profissional de Filtro e Exportação")
     st.markdown(
         """
@@ -64,21 +61,18 @@ try:
     # ================================
     st.sidebar.header("🔎 Filtros")
 
-    # Categoria
     categorias = st.sidebar.multiselect(
         "Categoria",
         options=sorted(df["categoria"].dropna().unique()),
         default=sorted(df["categoria"].dropna().unique())
     )
 
-    # Setor
     setores = st.sidebar.multiselect(
         "Setor",
         options=sorted(df["setor"].dropna().unique()),
         default=sorted(df["setor"].dropna().unique())
     )
 
-    # Status de Compra
     status_compra = st.sidebar.multiselect(
         "Status de Compra",
         options=["Nunca comprou", "Já comprou"],
@@ -91,28 +85,21 @@ try:
     st.sidebar.subheader("📅 Datas")
 
     # Última visita
-    min_visita = df["data_ultima_visita"].min()
-    max_visita = df["data_ultima_visita"].max()
-
     data_visita = st.sidebar.date_input(
         "Período da Última Visita",
-        value=(min_visita, max_visita),
-        min_value=min_visita,
-        max_value=max_visita
+        value=(df["data_ultima_visita"].min(), df["data_ultima_visita"].max()),
+        min_value=df["data_ultima_visita"].min(),
+        max_value=df["data_ultima_visita"].max()
     )
 
     # Última compra (apenas quem já comprou)
     df_com_compra = df[df["data_ultima_compra"].notna()]
-
     if not df_com_compra.empty:
-        min_compra = df_com_compra["data_ultima_compra"].min()
-        max_compra = df_com_compra["data_ultima_compra"].max()
-
         data_compra = st.sidebar.date_input(
             "Período da Última Compra (somente quem já comprou)",
-            value=(min_compra, max_compra),
-            min_value=min_compra,
-            max_value=max_compra
+            value=(df_com_compra["data_ultima_compra"].min(), df_com_compra["data_ultima_compra"].max()),
+            min_value=df_com_compra["data_ultima_compra"].min(),
+            max_value=df_com_compra["data_ultima_compra"].max()
         )
     else:
         data_compra = None
@@ -123,18 +110,14 @@ try:
     df_filtrado = df[
         (df["categoria"].isin(categorias)) &
         (df["setor"].isin(setores)) &
-        (df["status_compra"].isin(status_compra))
-    ]
-
-    # Filtro por datas
-    df_filtrado = df_filtrado[
-        (df_filtrado["data_ultima_visita"].between(data_visita[0], data_visita[1]))
+        (df["status_compra"].isin(status_compra)) &
+        (df["data_ultima_visita"].between(*data_visita))
     ]
 
     if data_compra:
         df_filtrado = df_filtrado[
-            (df_filtrado["data_ultima_compra"].between(data_compra[0], data_compra[1]))
-            | (df_filtrado["status_compra"] == "Nunca comprou")
+            (df_filtrado["data_ultima_compra"].between(*data_compra)) |
+            (df_filtrado["status_compra"] == "Nunca comprou")
         ]
 
     # ================================

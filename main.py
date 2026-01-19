@@ -194,43 +194,45 @@ file_name = f"clientes_{timestamp}.{file_ext}"
 st.info(f"Nome do arquivo: **{file_name}**")
 st.info(f"Total estimado para exportação: {total:,} registros")
 
-# Adiciona alerta se tentar exportar mais de 1 milhão em Excel
-if total > 1000000 and export_format.startswith("Excel"):
-    st.error("❌ Não é possível exportar mais de 1 milhão de registros em formato Excel.")
-    st.error("Por favor, altere o formato para CSV na barra lateral.")
-else:
-    if st.button("🚀 INICIAR EXPORTAÇÃO", type="primary", use_container_width=True):
-        with st.spinner(f"Exportando {total:,} registros..."):
-            try:
-                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
-                tmp_path = tmp_file.name
-                tmp_file.close()
-
-                df_export = con.execute(query).df()
-
-                if export_format.startswith("Excel"):
-                    df_export.to_excel(tmp_path, index=False)
-                    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                else:
-                    df_export.to_csv(tmp_path, index=False)
-                    mime_type = "text/csv"
-
-                file_size = os.path.getsize(tmp_path) / (1024*1024)
-
-                with open(tmp_path, 'rb') as f:
-                    file_data = f.read()
-
-                os.unlink(tmp_path)
-
-                st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
-                st.download_button(
-                    label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
-                    data=file_data,
-                    file_name=file_name,
-                    mime=mime_type,
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"❌ Erro durante exportação: {e}")
-else:
+# Verifica se o arquivo foi baixado do Hugging Face
+if not caminho_arquivo:
     st.warning("Aguardando configuração do Token HF_TOKEN nos secrets do Streamlit Cloud.")
+else:
+    # Adiciona alerta se tentar exportar mais de 1 milhão em Excel
+    if total > 1000000 and export_format.startswith("Excel"):
+        st.error("❌ Não é possível exportar mais de 1 milhão de registros em formato Excel.")
+        st.error("Por favor, altere o formato para CSV na barra lateral.")
+    else:
+        if st.button("🚀 INICIAR EXPORTAÇÃO", type="primary", use_container_width=True):
+            with st.spinner(f"Exportando {total:,} registros..."):
+                try:
+                    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
+                    tmp_path = tmp_file.name
+                    tmp_file.close()
+
+                    df_export = con.execute(query).df()
+
+                    if export_format.startswith("Excel"):
+                        df_export.to_excel(tmp_path, index=False)
+                        mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    else:
+                        df_export.to_csv(tmp_path, index=False)
+                        mime_type = "text/csv"
+
+                    file_size = os.path.getsize(tmp_path) / (1024*1024)
+
+                    with open(tmp_path, 'rb') as f:
+                        file_data = f.read()
+
+                    os.unlink(tmp_path)
+
+                    st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
+                    st.download_button(
+                        label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
+                        data=file_data,
+                        file_name=file_name,
+                        mime=mime_type,
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.error(f"❌ Erro durante exportação: {e}")

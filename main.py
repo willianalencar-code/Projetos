@@ -72,7 +72,7 @@ min_compra, max_compra = con.execute("SELECT MIN(data_ultima_compra), MAX(data_u
 if "date_visita" not in st.session_state:
     st.session_state.date_visita = [min_visita, max_visita]
 
-# session_state para última compra - CORRIGIDO PARA SER IGUAL AO DE VISITA
+# session_state para última compra - INICIALIZA COM O RANGE COMPLETO
 if "date_compra" not in st.session_state:
     st.session_state.date_compra = [min_compra, max_compra]
 
@@ -83,7 +83,7 @@ date_visita_range = st.sidebar.date_input(
     key="date_visita_input"
 )
 
-# Widget para última compra - AGORA É UM RANGE IGUAL AO DE VISITA
+# Widget para última compra - AGORA COM RANGE PRÉ-SELECIONADO
 date_compra_range = st.sidebar.date_input(
     "Período da última compra",
     value=st.session_state.date_compra,
@@ -97,8 +97,43 @@ st.session_state.date_compra = date_compra_range
 # opção somente member_pk
 only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
 
-# formato (Excel e CSV apenas)
-export_format = st.sidebar.selectbox("Formato:", ["Excel (.xlsx)", "CSV"])
+# Verifica o total de registros ANTES de mostrar as opções de formato
+query_pre_count = "SELECT * FROM clientes WHERE 1=1"
+
+if id_busca:
+    query_pre_count += f" AND CAST(member_pk AS VARCHAR) = '{id_busca}'"
+
+if cat_sel:
+    query_pre_count += f" AND categoria IN ({', '.join([f'\'{c}\'' for c in cat_sel])})"
+
+if setor_sel:
+    query_pre_count += f" AND setor IN ({', '.join([f'\'{s}\'' for s in setor_sel])})"
+
+if len(date_visita_range) == 2:
+    query_pre_count += f" AND data_ultima_visita BETWEEN '{date_visita_range[0]}' AND '{date_visita_range[1]}'"
+
+if len(date_compra_range) == 2:
+    start, end = date_compra_range
+    query_pre_count += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
+
+if only_member_pk:
+    query_pre_count = query_pre_count.replace("SELECT *", "SELECT member_pk")
+
+# Conta os registros filtrados
+total_filtrado = con.execute(f"SELECT COUNT(*) FROM ({query_pre_count})").fetchone()[0]
+
+# Define as opções de formato com base no total filtrado
+if total_filtrado > 1000000:
+    # Se mais de 1 milhão de linhas, só permite CSV
+    export_format = st.sidebar.selectbox(
+        "Formato:", 
+        ["CSV"], 
+        help="⚠️ Para exportações acima de 1 milhão de linhas, use CSV para melhor desempenho"
+    )
+    st.sidebar.warning(f"⚠️ Para {total_filtrado:,} registros, recomendamos usar CSV para melhor desempenho.")
+else:
+    # Se 1 milhão ou menos, permite Excel e CSV
+    export_format = st.sidebar.selectbox("Formato:", ["Excel (.xlsx)", "CSV"])
 
 # ==========================================
 # MONTAR QUERY
@@ -117,9 +152,10 @@ if setor_sel:
 if len(date_visita_range) == 2:
     query += f" AND data_ultima_visita BETWEEN '{date_visita_range[0]}' AND '{date_visita_range[1]}'"
 
-# CORRIGIDO: Agora aplica o filtro de compra como range, igual ao de visita
+# FILTRO PARA DATA DA ÚLTIMA COMPRA - AGORA SEMPRE FUNCIONA
 if len(date_compra_range) == 2:
-    query += f" AND data_ultima_compra BETWEEN '{date_compra_range[0]}' AND '{date_compra_range[1]}'"
+    start, end = date_compra_range
+    query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
 
 if only_member_pk:
     query = query.replace("SELECT *", "SELECT member_pk")
@@ -158,38 +194,43 @@ file_name = f"clientes_{timestamp}.{file_ext}"
 st.info(f"Nome do arquivo: **{file_name}**")
 st.info(f"Total estimado para exportação: {total:,} registros")
 
-if st.button("🚀 INICIAR EXPORTAÇÃO", type="primary", use_container_width=True):
-    with st.spinner(f"Exportando {total:,} registros..."):
-        try:
-            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
-            tmp_path = tmp_file.name
-            tmp_file.close()
+# Adiciona alerta se tentar exportar mais de 1 milhão em Excel
+if total > 1000000 and export_format.startswith("Excel"):
+    st.error("❌ Não é possível exportar mais de 1 milhão de registros em formato Excel.")
+    st.error("Por favor, altere o formato para CSV na barra lateral.")
+else:
+    if st.button("🚀 INICIAR EXPORTAÇÃO", type="primary", use_container_width=True):
+        with st.spinner(f"Exportando {total:,} registros..."):
+            try:
+                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
+                tmp_path = tmp_file.name
+                tmp_file.close()
 
-            df_export = con.execute(query).df()
+                df_export = con.execute(query).df()
 
-            if export_format.startswith("Excel"):
-                df_export.to_excel(tmp_path, index=False)
-                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            else:
-                df_export.to_csv(tmp_path, index=False)
-                mime_type = "text/csv"
+                if export_format.startswith("Excel"):
+                    df_export.to_excel(tmp_path, index=False)
+                    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                else:
+                    df_export.to_csv(tmp_path, index=False)
+                    mime_type = "text/csv"
 
-            file_size = os.path.getsize(tmp_path) / (1024*1024)
+                file_size = os.path.getsize(tmp_path) / (1024*1024)
 
-            with open(tmp_path, 'rb') as f:
-                file_data = f.read()
+                with open(tmp_path, 'rb') as f:
+                    file_data = f.read()
 
-            os.unlink(tmp_path)
+                os.unlink(tmp_path)
 
-            st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
-            st.download_button(
-                label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
-                data=file_data,
-                file_name=file_name,
-                mime=mime_type,
-                use_container_width=True
-            )
-        except Exception as e:
-            st.error(f"❌ Erro durante exportação: {e}")
+                st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
+                st.download_button(
+                    label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
+                    data=file_data,
+                    file_name=file_name,
+                    mime=mime_type,
+                    use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"❌ Erro durante exportação: {e}")
 else:
     st.warning("Aguardando configuração do Token HF_TOKEN nos secrets do Streamlit Cloud.")

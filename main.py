@@ -35,7 +35,7 @@ def get_dataset():
 
 @st.cache_resource(show_spinner=False)
 def get_connection():
-    return duckdb.connect(database=':memory:')
+    return duckdb.connect(database=":memory:")
 
 # ==========================================
 # INICIALIZAÇÃO
@@ -44,7 +44,13 @@ caminho_arquivo = get_dataset()
 con = get_connection()
 
 if caminho_arquivo:
-    con.execute(f"CREATE OR REPLACE TABLE clientes AS SELECT * FROM read_parquet('{caminho_arquivo}')")
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE clientes AS
+        SELECT * FROM read_parquet('{caminho_arquivo}')
+        """
+    )
+
     st.title("📋 Gestão e Exportação de Clientes")
 
     # ==========================================
@@ -53,101 +59,129 @@ if caminho_arquivo:
     st.sidebar.header("🔍 Filtros")
 
     # member_pk
-    id_busca = st.sidebar.text_input("Buscar por member_pk:", key="id_busca")
+    id_busca = st.sidebar.text_input("Buscar por member_pk:")
 
     # categorias
-    categorias = con.execute("SELECT DISTINCT categoria FROM clientes WHERE categoria IS NOT NULL").df()['categoria'].tolist()
-    cat_sel = st.sidebar.multiselect("Categorias:", categorias, key="cat_sel")
+    categorias = (
+        con.execute(
+            "SELECT DISTINCT categoria FROM clientes WHERE categoria IS NOT NULL"
+        )
+        .df()["categoria"]
+        .tolist()
+    )
+    cat_sel = st.sidebar.multiselect("Categorias:", categorias)
 
     # setores
-    setores = con.execute("SELECT DISTINCT setor FROM clientes WHERE setor IS NOT NULL").df()['setor'].tolist()
-    setor_sel = st.sidebar.multiselect("Setores:", setores, key="setor_sel")
+    setores = (
+        con.execute(
+            "SELECT DISTINCT setor FROM clientes WHERE setor IS NOT NULL"
+        )
+        .df()["setor"]
+        .tolist()
+    )
+    setor_sel = st.sidebar.multiselect("Setores:", setores)
 
-    # datas
-    min_visita, max_visita = con.execute("SELECT MIN(data_ultima_visita), MAX(data_ultima_visita) FROM clientes").fetchone()
-    min_compra, max_compra = con.execute("SELECT MIN(data_ultima_compra), MAX(data_ultima_compra) FROM clientes").fetchone()
+    # datas mínimas e máximas
+    min_visita, max_visita = con.execute(
+        "SELECT MIN(data_ultima_visita), MAX(data_ultima_visita) FROM clientes"
+    ).fetchone()
 
-    # session_state para última visita
-    if "date_visita" not in st.session_state:
-        st.session_state.date_visita = [min_visita, max_visita]
+    min_compra, max_compra = con.execute(
+        "SELECT MIN(data_ultima_compra), MAX(data_ultima_compra) FROM clientes"
+    ).fetchone()
 
-    # session_state para última compra
-    if "date_compra" not in st.session_state:
-        st.session_state.date_compra = None  # inicial vazio
-        st.session_state.date_compra_selected = False
-
-    # Widget para última visita
+    # ----------------------------
+    # Última visita (sempre ativo)
+    # ----------------------------
     date_visita_range = st.sidebar.date_input(
         "Período da última visita",
-        value=st.session_state.date_visita,
-        key="date_visita_input"
+        value=[min_visita, max_visita]
     )
 
-    # Widget para última compra (desmarcado por default)
-    date_compra_range = st.sidebar.date_input(
-        "Período da última compra",
-        value=st.session_state.date_compra,
-        key="date_compra_input"
-    )
+    # ----------------------------
+    # Última compra (opcional)
+    # ----------------------------
+    filtrar_compra = st.sidebar.checkbox("Filtrar por última compra")
 
-    # Atualiza session_state
-    st.session_state.date_visita = date_visita_range
-    if date_compra_range:
-        # Se o usuário selecionou um range, marca como selecionado
-        st.session_state.date_compra_selected = True
-        st.session_state.date_compra = date_compra_range
-    else:
-        st.session_state.date_compra_selected = False
+    if filtrar_compra:
+        date_compra_range = st.sidebar.date_input(
+            "Período da última compra",
+            value=[min_compra, max_compra]
+        )
 
     # opção somente member_pk
-    only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
+    only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk")
 
-    # formato (Excel e CSV apenas)
+    # formato
     export_format = st.sidebar.selectbox("Formato:", ["Excel (.xlsx)", "CSV"])
 
     # ==========================================
     # MONTAR QUERY
     # ==========================================
     query = "SELECT * FROM clientes WHERE 1=1"
+
     if id_busca:
         query += f" AND CAST(member_pk AS VARCHAR) = '{id_busca}'"
+
     if cat_sel:
-        query += f" AND categoria IN ({', '.join([f'\'{c}\'' for c in cat_sel])})"
+        query += " AND categoria IN ({})".format(
+            ", ".join([f"'{c}'" for c in cat_sel])
+        )
+
     if setor_sel:
-        query += f" AND setor IN ({', '.join([f'\'{s}\'' for s in setor_sel])})"
+        query += " AND setor IN ({})".format(
+            ", ".join([f"'{s}'" for s in setor_sel])
+        )
+
     if len(date_visita_range) == 2:
-        query += f" AND data_ultima_visita BETWEEN '{date_visita_range[0]}' AND '{date_visita_range[1]}'"
-    if st.session_state.date_compra_selected and st.session_state.date_compra and len(st.session_state.date_compra) == 2:
-        start, end = st.session_state.date_compra
-        query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
+        start, end = date_visita_range
+        query += f"""
+            AND data_ultima_visita
+            BETWEEN DATE '{start}' AND DATE '{end}'
+        """
+
+    if filtrar_compra and len(date_compra_range) == 2:
+        start, end = date_compra_range
+        query += f"""
+            AND data_ultima_compra
+            BETWEEN DATE '{start}' AND DATE '{end}'
+        """
 
     if only_member_pk:
         query = query.replace("SELECT *", "SELECT member_pk")
 
     # ==========================================
-    # METRICS
+    # MÉTRICAS
     # ==========================================
-    total = con.execute(f"SELECT COUNT(*) FROM ({query})").fetchone()[0]
-    total_unicos = con.execute(f"SELECT COUNT(DISTINCT member_pk) FROM ({query})").fetchone()[0]
+    total = con.execute(
+        f"SELECT COUNT(*) FROM ({query})"
+    ).fetchone()[0]
 
-    col1, col2, col3 = st.columns(3)
+    total_unicos = con.execute(
+        f"SELECT COUNT(DISTINCT member_pk) FROM ({query})"
+    ).fetchone()[0]
+
+    col1, col2 = st.columns(2)
     col1.metric("Total de registros", f"{total:,}")
     col2.metric("Clientes únicos (member_pk)", f"{total_unicos:,}")
-    
+
     # ==========================================
     # PRÉ-VISUALIZAÇÃO
     # ==========================================
     st.subheader("📋 Pré-visualização (100 linhas)")
     df_preview = con.execute(query + " LIMIT 100").df()
-    for col in ['data_ultima_visita', 'data_ultima_compra']:
+
+    for col in ["data_ultima_visita", "data_ultima_compra"]:
         if col in df_preview.columns:
-            df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce')
+            df_preview[col] = pd.to_datetime(df_preview[col], errors="coerce")
+
     st.dataframe(df_preview, use_container_width=True)
 
     # ==========================================
     # EXPORTAÇÃO
     # ==========================================
     st.header("📤 Exportação")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_ext = "xlsx" if export_format.startswith("Excel") else "csv"
     file_name = f"clientes_{timestamp}.{file_ext}"
@@ -156,9 +190,11 @@ if caminho_arquivo:
     st.info(f"Total estimado para exportação: {total:,} registros")
 
     if st.button("🚀 INICIAR EXPORTAÇÃO", type="primary", use_container_width=True):
-        with st.spinner(f"Exportando {total:,} registros..."):
+        with st.spinner("Exportando dados..."):
             try:
-                tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
+                tmp_file = tempfile.NamedTemporaryFile(
+                    delete=False, suffix=f".{file_ext}"
+                )
                 tmp_path = tmp_file.name
                 tmp_file.close()
 
@@ -166,17 +202,24 @@ if caminho_arquivo:
 
                 if export_format.startswith("Excel"):
                     df_export.to_excel(tmp_path, index=False)
-                    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    mime_type = (
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
                 else:
                     df_export.to_csv(tmp_path, index=False)
                     mime_type = "text/csv"
 
-                file_size = os.path.getsize(tmp_path) / (1024*1024)
-                with open(tmp_path, 'rb') as f:
+                file_size = os.path.getsize(tmp_path) / (1024 * 1024)
+
+                with open(tmp_path, "rb") as f:
                     file_data = f.read()
+
                 os.unlink(tmp_path)
 
-                st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
+                st.success(
+                    f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB"
+                )
+
                 st.download_button(
                     label=f"📥 BAIXAR ARQUIVO ({file_size:.2f} MB)",
                     data=file_data,
@@ -189,4 +232,6 @@ if caminho_arquivo:
                 st.error(f"❌ Erro durante exportação: {e}")
 
 else:
-    st.warning("Aguardando configuração do Token HF_TOKEN nos secrets do Streamlit Cloud.")
+    st.warning(
+        "Aguardando configuração do Token HF_TOKEN nos secrets do Streamlit Cloud."
+    )

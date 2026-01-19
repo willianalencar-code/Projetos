@@ -72,23 +72,9 @@ min_compra, max_compra = con.execute("SELECT MIN(data_ultima_compra), MAX(data_u
 if "date_visita" not in st.session_state:
     st.session_state.date_visita = [min_visita, max_visita]
 
-# session_state para última compra - INÍCIO DA MODIFICAÇÃO
-# Adicionar checkbox para ativar/desativar filtro
-if "use_compra_filter" not in st.session_state:
-    st.session_state.use_compra_filter = False
-
-# Inicializar com valores válidos, não com None
+# session_state para última compra - CORRIGIDO PARA SER IGUAL AO DE VISITA
 if "date_compra" not in st.session_state:
     st.session_state.date_compra = [min_compra, max_compra]
-
-# Checkbox para ativar filtro
-use_compra_filter = st.sidebar.checkbox(
-    "Filtrar por última compra", 
-    value=st.session_state.use_compra_filter,
-    key="use_compra_filter_checkbox"
-)
-
-st.session_state.use_compra_filter = use_compra_filter
 
 # Widget para última visita
 date_visita_range = st.sidebar.date_input(
@@ -97,21 +83,16 @@ date_visita_range = st.sidebar.date_input(
     key="date_visita_input"
 )
 
-# Widget para última compra - SÓ MOSTRA SE CHECKBOX MARCADO
-if st.session_state.use_compra_filter:
-    date_compra_range = st.sidebar.date_input(
-        "Período da última compra",
-        value=st.session_state.date_compra,
-        key="date_compra_input"
-    )
-    # Atualiza session_state apenas quando filtro está ativo
-    st.session_state.date_compra = date_compra_range
-else:
-    # Quando desmarcado, não atualiza o date_compra para manter o último valor selecionado
-    date_compra_range = None
+# Widget para última compra - AGORA É UM RANGE IGUAL AO DE VISITA
+date_compra_range = st.sidebar.date_input(
+    "Período da última compra",
+    value=st.session_state.date_compra,
+    key="date_compra_input"
+)
 
 # Atualiza session_state
 st.session_state.date_visita = date_visita_range
+st.session_state.date_compra = date_compra_range
 
 # opção somente member_pk
 only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
@@ -136,10 +117,9 @@ if setor_sel:
 if len(date_visita_range) == 2:
     query += f" AND data_ultima_visita BETWEEN '{date_visita_range[0]}' AND '{date_visita_range[1]}'"
 
-# MODIFICAÇÃO: Só aplica filtro se checkbox estiver marcado E tiver range válido
-if st.session_state.use_compra_filter and st.session_state.date_compra and len(st.session_state.date_compra) == 2:
-    start, end = st.session_state.date_compra
-    query += f" AND data_ultima_compra BETWEEN '{start}' AND '{end}'"
+# CORRIGIDO: Agora aplica o filtro de compra como range, igual ao de visita
+if len(date_compra_range) == 2:
+    query += f" AND data_ultima_compra BETWEEN '{date_compra_range[0]}' AND '{date_compra_range[1]}'"
 
 if only_member_pk:
     query = query.replace("SELECT *", "SELECT member_pk")

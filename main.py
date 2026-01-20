@@ -436,8 +436,11 @@ if dataset_info:
                             
                             progress_bar.progress(1.0)
                         else:
+                            # CORREÇÃO: Usar st.stop() em vez de return
                             st.error("Nenhum dado para exportar!")
-                            return  # CORREÇÃO AQUI: Este return estava causando o erro
+                            progress_bar.empty()
+                            status_text.empty()
+                            st.stop()
                     
                     else:
                         # Para CSV, processamos em lotes

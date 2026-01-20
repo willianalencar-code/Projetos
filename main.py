@@ -85,7 +85,7 @@ def get_dataset_info():
             min_compra = pd.Timestamp('2020-01-01')
             max_compra = pd.Timestamp.now()
         
-        # Obtém member_pk únicos
+        # Obtém member_pk únicos TOTAL da base
         try:
             unique_members = con.execute(f"""
                 SELECT COUNT(DISTINCT member_pk) as unique_members
@@ -233,6 +233,12 @@ if dataset_info:
     # ==========================================
     st.sidebar.header("📊 Estatísticas")
     
+    # Inicializa session_state se não existir
+    if 'total_filtrado' not in st.session_state:
+        st.session_state.total_filtrado = 0
+        st.session_state.unique_members_filtrado = 0
+        st.session_state.where_clause = "1=1"
+    
     # Botão para estimar resultados
     if st.sidebar.button("🔄 Calcular Estimativa", key="calc_estimate"):
         with st.spinner("Calculando estimativa..."):
@@ -267,7 +273,7 @@ if dataset_info:
                 st.session_state.unique_members_filtrado = 0
     
     # Mostra estimativa se existir
-    if 'total_filtrado' in st.session_state:
+    if 'total_filtrado' in st.session_state and st.session_state.total_filtrado > 0:
         total_filtrado = st.session_state.total_filtrado
         unique_members_filtrado = st.session_state.unique_members_filtrado
         where_clause = st.session_state.where_clause
@@ -286,29 +292,75 @@ if dataset_info:
         st.sidebar.metric("Registros filtrados", f"{total_filtrado:,}")
         st.sidebar.metric("Clientes únicos", f"{unique_members_filtrado:,}")
     else:
-        total_filtrado = 0
-        unique_members_filtrado = 0
+        total_filtrado = st.session_state.total_filtrado
+        unique_members_filtrado = st.session_state.unique_members_filtrado
         export_format = "CSV"
-        where_clause = "1=1"
+        where_clause = st.session_state.where_clause
+    
+    st.sidebar.metric("Total na base", f"{dataset_info['num_rows']:,}")
     
     # ==========================================
-    # MÉTRICAS PRINCIPAIS - APENAS TAMANHO DA BASE E MEMBER_PK ÚNICOS
+    # MÉTRICAS PRINCIPAIS - AJUSTADO PARA MOSTRAR DADOS FILTRADOS
     # ==========================================
+    st.subheader("📈 Métricas da Consulta")
+    
     col1, col2, col3 = st.columns(3)
     
-    # Tamanho total da base
-    col1.metric("📊 Tamanho total da base", f"{dataset_info['num_rows']:,}")
+    # Total de registros filtrados
+    with col1:
+        st.metric(
+            label="📊 Registros filtrados",
+            value=f"{total_filtrado:,}",
+            delta=f"{total_filtrado - dataset_info['num_rows']:,}" if total_filtrado != dataset_info['num_rows'] else None,
+            delta_color="normal"
+        )
     
-    # Member_pk únicos na base completa
-    col2.metric("👥 Clientes únicos totais", f"{dataset_info['unique_members']:,}")
+    # Clientes únicos filtrados
+    with col2:
+        st.metric(
+            label="👥 Clientes únicos (filtrados)",
+            value=f"{unique_members_filtrado:,}",
+            delta=f"{unique_members_filtrado - dataset_info['unique_members']:,}" if unique_members_filtrado != dataset_info['unique_members'] else None,
+            delta_color="normal"
+        )
     
     # Status do filtro de compra
-    if usar_filtro_compra:
-        status_filtro = "✅ Ativo"
-    else:
-        status_filtro = "❌ Inativo"
+    with col3:
+        if usar_filtro_compra:
+            status_filtro = "✅ Ativo"
+            delta_text = f"{data_inicio_compra} a {data_fim_compra}"
+        else:
+            status_filtro = "❌ Inativo"
+            delta_text = None
+        
+        st.metric(
+            label="🎯 Filtro de compra",
+            value=status_filtro,
+            delta=delta_text
+        )
     
-    col3.metric("🎯 Filtro de compra", status_filtro)
+    # ==========================================
+    # MÉTRICAS DA BASE COMPLETA (em expander)
+    # ==========================================
+    with st.expander("📋 Informações da Base Completa"):
+        col_base1, col_base2 = st.columns(2)
+        
+        with col_base1:
+            st.metric(
+                label="📦 Total da base",
+                value=f"{dataset_info['num_rows']:,}",
+                help="Número total de registros no dataset"
+            )
+        
+        with col_base2:
+            st.metric(
+                label="👤 Clientes únicos totais",
+                value=f"{dataset_info['unique_members']:,}",
+                help="Número total de member_pk distintos na base completa"
+            )
+        
+        st.info(f"**Período de visitas:** {dataset_info['min_visita'].date()} a {dataset_info['max_visita'].date()}")
+        st.info(f"**Período de compras:** {dataset_info['min_compra'].date()} a {dataset_info['max_compra'].date()}")
     
     # ==========================================
     # PRÉ-VISUALIZAÇÃO OTIMIZADA
@@ -318,7 +370,7 @@ if dataset_info:
     # Query para preview otimizada
     select_cols = "member_pk" if only_member_pk else "*"
     
-    if 'where_clause' in st.session_state:
+    if 'where_clause' in st.session_state and st.session_state.total_filtrado > 0:
         preview_query = f"""
         SELECT {select_cols}
         FROM read_parquet('{dataset_info['caminho']}')
@@ -364,7 +416,7 @@ if dataset_info:
         st.info("Configure os filtros e clique em 'Calcular Estimativa' para ver a pré-visualização.")
     
     # ==========================================
-    # EXPORTAÇÃO CORRIGIDA
+    # EXPORTAÇÃO
     # ==========================================
     st.header("📤 Exportação")
     
@@ -436,7 +488,6 @@ if dataset_info:
                             
                             progress_bar.progress(1.0)
                         else:
-                            # CORREÇÃO: Usar st.stop() em vez de return
                             st.error("Nenhum dado para exportar!")
                             progress_bar.empty()
                             status_text.empty()
@@ -543,16 +594,3 @@ with st.expander("💡 Dicas para melhor performance"):
     - Processamento otimizado para lotes
     - Cache inteligente para queries repetidas
     """)
-
-# ==========================================
-# INFORMAÇÕES DO SISTEMA
-# ==========================================
-with st.expander("ℹ️ Informações do Sistema"):
-    if dataset_info:
-        st.write(f"**Dataset carregado:** {os.path.basename(dataset_info['caminho'])}")
-        st.write(f"**Tamanho total:** {dataset_info['num_rows']:,} registros")
-        st.write(f"**Clientes únicos:** {dataset_info['unique_members']:,} member_pk distintos")
-        st.write(f"**Categorias disponíveis:** {len(dataset_info['categorias'])}")
-        st.write(f"**Setores disponíveis:** {len(dataset_info['setores'])}")
-        st.write(f"**Período de visitas:** {dataset_info['min_visita'].date()} a {dataset_info['max_visita'].date()}")
-        st.write(f"**Período de compras:** {dataset_info['min_compra'].date()} a {dataset_info['max_compra'].date()}")

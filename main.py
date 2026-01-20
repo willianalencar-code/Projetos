@@ -137,6 +137,7 @@ if dataset_info:
     # Filtros de data
     st.sidebar.subheader("📅 Filtros por Data")
     
+    # Última visita
     col1, col2 = st.sidebar.columns(2)
     
     with col1:
@@ -153,21 +154,44 @@ if dataset_info:
             key="data_fim_visita"
         )
     
-    col3, col4 = st.sidebar.columns(2)
+    # Última compra - COM CHECKBOX PARA ATIVAR/DESATIVAR
+    st.sidebar.markdown("---")
+    usar_filtro_compra = st.sidebar.checkbox(
+        "Usar filtro de data da última compra", 
+        value=False,
+        help="Marque esta opção para filtrar por data da última compra. Desmarque para ignorar este filtro."
+    )
     
-    with col3:
-        data_inicio_compra = st.date_input(
-            "Data início compra",
-            value=dataset_info['min_compra'].date(),
-            key="data_inicio_compra"
-        )
+    if usar_filtro_compra:
+        col3, col4 = st.sidebar.columns(2)
+        
+        with col3:
+            data_inicio_compra = st.date_input(
+                "Data início compra",
+                value=dataset_info['min_compra'].date(),
+                key="data_inicio_compra"
+            )
+        
+        with col4:
+            data_fim_compra = st.date_input(
+                "Data fim compra",
+                value=dataset_info['max_compra'].date(),
+                key="data_fim_compra"
+            )
+    else:
+        # Define valores padrão quando o filtro está desativado
+        data_inicio_compra = None
+        data_fim_compra = None
     
-    with col4:
-        data_fim_compra = st.date_input(
-            "Data fim compra",
-            value=dataset_info['max_compra'].date(),
-            key="data_fim_compra"
+    # Adiciona opção para filtrar clientes que NUNCA compraram
+    if usar_filtro_compra:
+        filtrar_sem_compra = st.sidebar.checkbox(
+            "Incluir clientes que nunca compraram (NULL)",
+            value=False,
+            help="Marque para incluir clientes que não têm data de última compra"
         )
+    else:
+        filtrar_sem_compra = False
     
     # opção somente member_pk
     only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
@@ -178,7 +202,7 @@ if dataset_info:
     def build_query_conditions():
         conditions = []
         
-        if id_busca:
+        if id_busca and id_busca.strip():
             try:
                 # Tenta converter para inteiro se possível
                 int(id_busca)
@@ -194,10 +218,23 @@ if dataset_info:
             setor_list = ', '.join([f"'{s}'" for s in setor_sel])
             conditions.append(f"setor IN ({setor_list})")
         
+        # Filtro de data da última visita (sempre aplicado)
         conditions.append(f"data_ultima_visita >= '{data_inicio_visita}'")
         conditions.append(f"data_ultima_visita <= '{data_fim_visita}'")
-        conditions.append(f"data_ultima_compra >= '{data_inicio_compra}'")
-        conditions.append(f"data_ultima_compra <= '{data_fim_compra}'")
+        
+        # Filtro de data da última compra (só se ativado)
+        if usar_filtro_compra:
+            if filtrar_sem_compra:
+                # Inclui NULLs OU datas dentro do intervalo
+                conditions.append(f"""
+                    (data_ultima_compra IS NULL 
+                    OR (data_ultima_compra >= '{data_inicio_compra}' 
+                    AND data_ultima_compra <= '{data_fim_compra}'))
+                """)
+            else:
+                # Apenas datas dentro do intervalo (exclui NULLs)
+                conditions.append(f"data_ultima_compra >= '{data_inicio_compra}'")
+                conditions.append(f"data_ultima_compra <= '{data_fim_compra}'")
         
         return conditions
     
@@ -266,7 +303,16 @@ if dataset_info:
     else:
         col2.metric("Estimativa filtrada", "Clique em 'Calcular'")
     
-    col3.metric("Formato recomendado", "CSV" if total_filtrado > 500000 else "Ambos")
+    # Mostra status do filtro de compra
+    if usar_filtro_compra:
+        if filtrar_sem_compra:
+            status_filtro = "Compras + NULL"
+        else:
+            status_filtro = "Compras no período"
+    else:
+        status_filtro = "Sem filtro de compra"
+    
+    col3.metric("Filtro de compra", status_filtro)
     
     # ==========================================
     # PRÉ-VISUALIZAÇÃO OTIMIZADA
@@ -293,10 +339,32 @@ if dataset_info:
                 date_cols = ['data_ultima_visita', 'data_ultima_compra']
                 for col in date_cols:
                     if col in df_preview.columns:
-                        df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce').dt.date
+                        # Converte para datetime e formata
+                        df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce')
                 
-                st.dataframe(df_preview, use_container_width=True)
+                # Mostra dataframe com formatação condicional para NULLs
+                st.dataframe(
+                    df_preview,
+                    use_container_width=True,
+                    column_config={
+                        "data_ultima_compra": st.column_config.DatetimeColumn(
+                            "Última compra",
+                            format="DD/MM/YYYY",
+                        ),
+                        "data_ultima_visita": st.column_config.DatetimeColumn(
+                            "Última visita",
+                            format="DD/MM/YYYY",
+                        ),
+                    }
+                )
                 st.caption(f"Mostrando 50 de {total_filtrado:,} registros")
+                
+                # Estatísticas rápidas da pré-visualização
+                if 'data_ultima_compra' in df_preview.columns:
+                    null_compras = df_preview['data_ultima_compra'].isna().sum()
+                    if null_compras > 0:
+                        st.info(f"📝 Na pré-visualização: **{null_compras}** clientes sem data de compra (NULL)")
+                        
             else:
                 st.info("Nenhum resultado encontrado com os filtros atuais.")
                 
@@ -319,6 +387,15 @@ if dataset_info:
         
         st.info(f"📄 Nome do arquivo: **{file_name}**")
         st.info(f"📊 Total para exportação: **{total_filtrado:,}** registros")
+        
+        # Informações sobre o filtro aplicado
+        if usar_filtro_compra:
+            if filtrar_sem_compra:
+                st.info("🔍 **Filtro:** Clientes com compras no período **OU** que nunca compraram")
+            else:
+                st.info(f"🔍 **Filtro:** Clientes com compras entre **{data_inicio_compra}** e **{data_fim_compra}**")
+        else:
+            st.info("🔍 **Filtro:** Data da última compra ignorada")
         
         # Limite para Excel
         if total_filtrado > 1000000 and export_format == "Excel (.xlsx)":
@@ -440,6 +517,11 @@ with st.expander("💡 Dicas para melhor performance"):
     3. **Exporte apenas colunas necessárias** - Marque "Exportar apenas member_pk"
     4. **Use intervalos de data** - Filtre por período específico
     5. **Calcule estimativa primeiro** - Evite exportar dados indesejados
+    
+    **Novo: Filtro de última compra**
+    - ✅ **Desmarque a checkbox** para ignorar completamente o filtro de compra
+    - ✅ **Marque a checkbox** para ativar o filtro por data de compra
+    - ✅ **Marque 'Incluir NULLs'** para buscar clientes que nunca compraram
     
     **Limitações do Streamlit Cloud:**
     - Memória limitada (1GB no plano gratuito)

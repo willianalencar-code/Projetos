@@ -37,20 +37,71 @@ def get_dataset_info():
         parquet_file = pq.ParquetFile(caminho_local)
         num_rows = parquet_file.metadata.num_rows
         
-        # Lê apenas uma amostra para obter colunas
-        sample = pd.read_parquet(caminho_local, columns=['categoria', 'setor'], nrows=1000)
+        # Para obter categorias e setores, lemos apenas as colunas necessárias
+        # Usando DuckDB para eficiência
+        con = duckdb.connect(database=':memory:')
         
-        categorias = sample['categoria'].dropna().unique().tolist() if 'categoria' in sample.columns else []
-        setores = sample['setor'].dropna().unique().tolist() if 'setor' in sample.columns else []
+        # Obtém categorias únicas
+        try:
+            categorias_df = con.execute(f"""
+                SELECT DISTINCT categoria 
+                FROM read_parquet('{caminho_local}') 
+                WHERE categoria IS NOT NULL 
+                LIMIT 1000
+            """).df()
+            categorias = categorias_df['categoria'].tolist()
+        except:
+            categorias = []
+        
+        # Obtém setores únicos
+        try:
+            setores_df = con.execute(f"""
+                SELECT DISTINCT setor 
+                FROM read_parquet('{caminho_local}') 
+                WHERE setor IS NOT NULL 
+                LIMIT 1000
+            """).df()
+            setores = setores_df['setor'].tolist()
+        except:
+            setores = []
+        
+        # Obtém datas mínimas e máximas
+        try:
+            dates_df = con.execute(f"""
+                SELECT 
+                    MIN(data_ultima_visita) as min_visita,
+                    MAX(data_ultima_visita) as max_visita,
+                    MIN(data_ultima_compra) as min_compra,
+                    MAX(data_ultima_compra) as max_compra
+                FROM read_parquet('{caminho_local}')
+            """).df()
+            
+            min_visita = dates_df['min_visita'].iloc[0]
+            max_visita = dates_df['max_visita'].iloc[0]
+            min_compra = dates_df['min_compra'].iloc[0]
+            max_compra = dates_df['max_compra'].iloc[0]
+        except:
+            min_visita = pd.Timestamp('2020-01-01')
+            max_visita = pd.Timestamp.now()
+            min_compra = pd.Timestamp('2020-01-01')
+            max_compra = pd.Timestamp.now()
+        
+        con.close()
         
         return {
             'caminho': caminho_local,
             'num_rows': num_rows,
             'categorias': sorted(categorias),
-            'setores': sorted(setores)
+            'setores': sorted(setores),
+            'min_visita': min_visita,
+            'max_visita': max_visita,
+            'min_compra': min_compra,
+            'max_compra': max_compra
         }
     except Exception as e:
         st.error(f"Erro de conexão: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 @st.cache_resource(show_spinner=False)
@@ -63,7 +114,8 @@ def get_connection():
 st.title("📋 Gestão e Exportação de Clientes")
 
 # Carrega apenas informações do dataset
-dataset_info = get_dataset_info()
+with st.spinner("Carregando informações do dataset..."):
+    dataset_info = get_dataset_info()
 
 if dataset_info:
     # ==========================================
@@ -82,20 +134,22 @@ if dataset_info:
     setores = dataset_info['setores']
     setor_sel = st.sidebar.multiselect("Setores:", setores, key="setor_sel")
     
-    # Filtros de data com valores padrão
+    # Filtros de data
+    st.sidebar.subheader("📅 Filtros por Data")
+    
     col1, col2 = st.sidebar.columns(2)
     
     with col1:
         data_inicio_visita = st.date_input(
             "Data início visita",
-            value=datetime(2020, 1, 1),
+            value=dataset_info['min_visita'].date(),
             key="data_inicio_visita"
         )
     
     with col2:
         data_fim_visita = st.date_input(
             "Data fim visita",
-            value=datetime.now(),
+            value=dataset_info['max_visita'].date(),
             key="data_fim_visita"
         )
     
@@ -104,14 +158,14 @@ if dataset_info:
     with col3:
         data_inicio_compra = st.date_input(
             "Data início compra",
-            value=datetime(2020, 1, 1),
+            value=dataset_info['min_compra'].date(),
             key="data_inicio_compra"
         )
     
     with col4:
         data_fim_compra = st.date_input(
             "Data fim compra",
-            value=datetime.now(),
+            value=dataset_info['max_compra'].date(),
             key="data_fim_compra"
         )
     
@@ -125,7 +179,12 @@ if dataset_info:
         conditions = []
         
         if id_busca:
-            conditions.append(f"CAST(member_pk AS VARCHAR) = '{id_busca}'")
+            try:
+                # Tenta converter para inteiro se possível
+                int(id_busca)
+                conditions.append(f"member_pk = {id_busca}")
+            except:
+                conditions.append(f"CAST(member_pk AS VARCHAR) LIKE '%{id_busca}%'")
         
         if cat_sel:
             cat_list = ', '.join([f"'{c}'" for c in cat_sel])
@@ -135,8 +194,10 @@ if dataset_info:
             setor_list = ', '.join([f"'{s}'" for s in setor_sel])
             conditions.append(f"setor IN ({setor_list})")
         
-        conditions.append(f"data_ultima_visita BETWEEN '{data_inicio_visita}' AND '{data_fim_visita}'")
-        conditions.append(f"data_ultima_compra BETWEEN '{data_inicio_compra}' AND '{data_fim_compra}'")
+        conditions.append(f"data_ultima_visita >= '{data_inicio_visita}'")
+        conditions.append(f"data_ultima_visita <= '{data_fim_visita}'")
+        conditions.append(f"data_ultima_compra >= '{data_inicio_compra}'")
+        conditions.append(f"data_ultima_compra <= '{data_fim_compra}'")
         
         return conditions
     
@@ -145,20 +206,35 @@ if dataset_info:
     # ==========================================
     st.sidebar.header("📊 Estatísticas")
     
-    # Estimativa otimizada
-    conditions = build_query_conditions()
-    where_clause = " AND ".join(conditions) if conditions else "1=1"
+    # Botão para estimar resultados
+    if st.sidebar.button("🔄 Calcular Estimativa", key="calc_estimate"):
+        with st.spinner("Calculando estimativa..."):
+            conditions = build_query_conditions()
+            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            
+            # Query para contar resultados
+            count_query = f"""
+            SELECT COUNT(*) as total
+            FROM read_parquet('{dataset_info['caminho']}')
+            WHERE {where_clause}
+            """
+            
+            try:
+                con = get_connection()
+                total_filtrado = con.execute(count_query).fetchone()[0]
+                st.session_state.total_filtrado = total_filtrado
+                st.session_state.where_clause = where_clause
+                
+                st.sidebar.success(f"Estimativa: {total_filtrado:,} registros")
+                
+            except Exception as e:
+                st.sidebar.error(f"Erro na contagem: {e}")
+                st.session_state.total_filtrado = 0
     
-    # Query para contar resultados (usando DuckDB direto no arquivo)
-    count_query = f"""
-    SELECT COUNT(*) as total
-    FROM read_parquet('{dataset_info['caminho']}')
-    WHERE {where_clause}
-    """
-    
-    try:
-        con = get_connection()
-        total_filtrado = con.execute(count_query).fetchone()[0]
+    # Mostra estimativa se existir
+    if 'total_filtrado' in st.session_state:
+        total_filtrado = st.session_state.total_filtrado
+        where_clause = st.session_state.where_clause
         
         # Ajusta formato de exportação baseado no tamanho
         if total_filtrado > 500000:
@@ -172,20 +248,25 @@ if dataset_info:
             )
         
         st.sidebar.metric("Registros filtrados", f"{total_filtrado:,}")
-        st.sidebar.metric("Total no dataset", f"{dataset_info['num_rows']:,}")
-        
-    except Exception as e:
-        st.sidebar.error(f"Erro na contagem: {e}")
+    else:
         total_filtrado = 0
         export_format = "CSV"
+        where_clause = "1=1"
+    
+    st.sidebar.metric("Total no dataset", f"{dataset_info['num_rows']:,}")
     
     # ==========================================
     # MÉTRICAS PRINCIPAIS
     # ==========================================
     col1, col2, col3 = st.columns(3)
     col1.metric("Total no dataset", f"{dataset_info['num_rows']:,}")
-    col2.metric("Estimativa filtrada", f"{total_filtrado:,}")
-    col3.metric("Formato", export_format)
+    
+    if 'total_filtrado' in st.session_state:
+        col2.metric("Estimativa filtrada", f"{st.session_state.total_filtrado:,}")
+    else:
+        col2.metric("Estimativa filtrada", "Clique em 'Calcular'")
+    
+    col3.metric("Formato recomendado", "CSV" if total_filtrado > 500000 else "Ambos")
     
     # ==========================================
     # PRÉ-VISUALIZAÇÃO OTIMIZADA
@@ -194,36 +275,44 @@ if dataset_info:
     
     # Query para preview otimizada
     select_cols = "member_pk" if only_member_pk else "*"
-    preview_query = f"""
-    SELECT {select_cols}
-    FROM read_parquet('{dataset_info['caminho']}')
-    WHERE {where_clause}
-    LIMIT 50
-    """
     
-    try:
-        df_preview = con.execute(preview_query).df()
+    if 'where_clause' in st.session_state:
+        preview_query = f"""
+        SELECT {select_cols}
+        FROM read_parquet('{dataset_info['caminho']}')
+        WHERE {where_clause}
+        LIMIT 50
+        """
         
-        if not df_preview.empty:
-            # Formata colunas de data
-            date_cols = ['data_ultima_visita', 'data_ultima_compra']
-            for col in date_cols:
-                if col in df_preview.columns:
-                    df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce').dt.date
+        try:
+            con = get_connection()
+            df_preview = con.execute(preview_query).df()
             
-            st.dataframe(df_preview, use_container_width=True)
-        else:
-            st.info("Nenhum resultado encontrado com os filtros atuais.")
-            
-    except Exception as e:
-        st.error(f"Erro na pré-visualização: {e}")
+            if not df_preview.empty:
+                # Formata colunas de data
+                date_cols = ['data_ultima_visita', 'data_ultima_compra']
+                for col in date_cols:
+                    if col in df_preview.columns:
+                        df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce').dt.date
+                
+                st.dataframe(df_preview, use_container_width=True)
+                st.caption(f"Mostrando 50 de {total_filtrado:,} registros")
+            else:
+                st.info("Nenhum resultado encontrado com os filtros atuais.")
+                
+        except Exception as e:
+            st.error(f"Erro na pré-visualização: {e}")
+    else:
+        st.info("Configure os filtros e clique em 'Calcular Estimativa' para ver a pré-visualização.")
     
     # ==========================================
     # EXPORTAÇÃO COM PROCESSAMENTO EM LOTES
     # ==========================================
     st.header("📤 Exportação")
     
-    if total_filtrado > 0:
+    if 'total_filtrado' in st.session_state and st.session_state.total_filtrado > 0:
+        total_filtrado = st.session_state.total_filtrado
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_ext = "xlsx" if export_format == "Excel (.xlsx)" else "csv"
         file_name = f"clientes_{timestamp}.{file_ext}"
@@ -246,44 +335,48 @@ if dataset_info:
                     tmp_path = tmp_file.name
                     tmp_file.close()
                     
+                    # Conecta ao DuckDB
+                    con = get_connection()
+                    
+                    # Query para exportação
+                    select_cols = "member_pk" if only_member_pk else "*"
+                    export_query = f"""
+                    SELECT {select_cols}
+                    FROM read_parquet('{dataset_info['caminho']}')
+                    WHERE {where_clause}
+                    """
+                    
                     # Processa em lotes para CSV (mais eficiente para grandes volumes)
                     if export_format == "CSV":
                         status_text.text("Exportando em lotes...")
                         
                         # Configura lote
-                        batch_size = 100000
+                        batch_size = 50000
                         first_batch = True
+                        processed_rows = 0
                         
-                        # Query para exportação
-                        select_cols = "member_pk" if only_member_pk else "*"
-                        export_query = f"""
-                        SELECT {select_cols}
-                        FROM read_parquet('{dataset_info['caminho']}')
-                        WHERE {where_clause}
-                        """
+                        # Exporta em lotes usando iterator
+                        result = con.execute(export_query)
                         
-                        # Exporta em lotes
-                        for i, batch in enumerate(con.execute(export_query).fetch_df_chunk(batch_size)):
+                        while True:
+                            batch = result.fetch_df_chunk(batch_size)
+                            if batch.empty:
+                                break
+                            
                             if first_batch:
                                 batch.to_csv(tmp_path, index=False)
                                 first_batch = False
                             else:
                                 batch.to_csv(tmp_path, mode='a', header=False, index=False)
                             
-                            progress = min((i + 1) * batch_size / total_filtrado, 1.0)
+                            processed_rows += len(batch)
+                            progress = min(processed_rows / total_filtrado, 1.0)
                             progress_bar.progress(progress)
-                            status_text.text(f"Processando lote {i+1}... ({len(batch):,} registros)")
+                            status_text.text(f"Processados {processed_rows:,} de {total_filtrado:,} registros")
                     
                     # Processa tudo de uma vez para Excel (apenas para volumes menores)
                     else:
                         status_text.text("Exportando para Excel...")
-                        
-                        select_cols = "member_pk" if only_member_pk else "*"
-                        export_query = f"""
-                        SELECT {select_cols}
-                        FROM read_parquet('{dataset_info['caminho']}')
-                        WHERE {where_clause}
-                        """
                         
                         df_export = con.execute(export_query).df()
                         df_export.to_excel(tmp_path, index=False)
@@ -319,8 +412,10 @@ if dataset_info:
                     import traceback
                     st.code(traceback.format_exc())
     
-    else:
+    elif 'total_filtrado' in st.session_state and st.session_state.total_filtrado == 0:
         st.warning("Nenhum registro encontrado com os filtros aplicados.")
+    else:
+        st.info("Configure os filtros e clique em 'Calcular Estimativa' para habilitar a exportação.")
     
 else:
     st.warning("""
@@ -344,9 +439,22 @@ with st.expander("💡 Dicas para melhor performance"):
     2. **Prefira CSV para grandes volumes** - Mais eficiente que Excel
     3. **Exporte apenas colunas necessárias** - Marque "Exportar apenas member_pk"
     4. **Use intervalos de data** - Filtre por período específico
+    5. **Calcule estimativa primeiro** - Evite exportar dados indesejados
     
     **Limitações do Streamlit Cloud:**
     - Memória limitada (1GB no plano gratuito)
     - Processamento otimizado para lotes
     - Cache inteligente para queries repetidas
     """)
+
+# ==========================================
+# INFORMAÇÕES DO SISTEMA
+# ==========================================
+with st.expander("ℹ️ Informações do Sistema"):
+    if dataset_info:
+        st.write(f"**Dataset carregado:** {dataset_info['caminho']}")
+        st.write(f"**Tamanho aproximado:** {dataset_info['num_rows']:,} registros")
+        st.write(f"**Categorias disponíveis:** {len(dataset_info['categorias'])}")
+        st.write(f"**Setores disponíveis:** {len(dataset_info['setores'])}")
+        st.write(f"**Período de visitas:** {dataset_info['min_visita'].date()} a {dataset_info['max_visita'].date()}")
+        st.write(f"**Período de compras:** {dataset_info['min_compra'].date()} a {dataset_info['max_compra'].date()}")

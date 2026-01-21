@@ -6,7 +6,6 @@ import tempfile
 from datetime import datetime
 import pyarrow.parquet as pq
 import warnings
-import plotly.express as px
 
 warnings.filterwarnings('ignore')
 
@@ -66,7 +65,7 @@ def get_dataset_info():
         # Carrega amostra para análise
         con = duckdb.connect(database=':memory:')
         
-        # Amostra para análise
+        # Amostra para categorias e setores
         sample_query = f"""
         SELECT DISTINCT categoria, setor
         FROM read_parquet('{caminho_local}')
@@ -117,7 +116,7 @@ def get_connection():
 # CABEÇALHO
 # ==========================================
 st.markdown("# 👥 Segmentação de Clientes")
-st.markdown("**Filtre e exporte sua base de clientes de forma inteligente**")
+st.markdown("**Filtre e exporte sua base de clientes**")
 
 # ==========================================
 # CARREGAMENTO DOS DADOS
@@ -133,11 +132,11 @@ if not dataset_info:
 # SEÇÃO DE FILTROS - SIDEBAR
 # ==========================================
 with st.sidebar:
-    st.markdown("### 🔍 Filtros Avançados")
+    st.markdown("### 🔍 Filtros")
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**📋 Filtros Principais**")
+        st.markdown("**Filtros Principais**")
         
         # Busca por ID
         id_busca = st.text_input("Buscar Cliente (ID)", 
@@ -156,10 +155,10 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**📅 Filtros Temporais**")
+        st.markdown("**Filtros de Data**")
         
         # Data de Visita
-        st.markdown("##### Última Visita")
+        st.markdown("**Última Visita**")
         col1, col2 = st.columns(2)
         with col1:
             data_inicio_visita = st.date_input("De", 
@@ -173,7 +172,7 @@ with st.sidebar:
                                            label_visibility="collapsed")
         
         # Data de Compra
-        st.markdown("##### Última Compra")
+        st.markdown("**Última Compra**")
         usar_compra = st.toggle("Ativar filtro", value=False, key="toggle_compra")
         
         if usar_compra:
@@ -196,10 +195,10 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**⚙️ Configurações**")
+        st.markdown("**Configurações de Exportação**")
         
         only_member_pk = st.checkbox("Exportar apenas IDs", value=False)
-        export_format = st.radio("Formato de Saída:", 
+        export_format = st.radio("Formato:", 
                                 ["CSV", "Excel"], 
                                 horizontal=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -258,13 +257,13 @@ total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita 
 # ==========================================
 # RESUMO DOS RESULTADOS
 # ==========================================
-st.markdown("### 📈 Resultados da Filtragem")
+st.markdown("### 📊 Resultados")
 
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Registros Encontrados", f"{total_filtrado:,}")
+    st.metric("Registros", f"{total_filtrado:,}")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
@@ -284,61 +283,13 @@ with col4:
     except:
         periodo_filtrado = "Período disponível"
     
-    st.metric("Período Filtrado", periodo_filtrado)
+    st.metric("Período", periodo_filtrado)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
-# VISUALIZAÇÕES
+# PRÉ-VISUALIZAÇÃO DOS DADOS
 # ==========================================
 if total_filtrado > 0:
-    col_viz1, col_viz2 = st.columns(2)
-    
-    with col_viz1:
-        # Distribuição por categoria
-        cat_query = f"""
-        SELECT categoria, COUNT(*) as count
-        FROM read_parquet('{dataset_info['caminho']}')
-        WHERE {where_clause}
-        GROUP BY categoria
-        ORDER BY count DESC
-        LIMIT 10
-        """
-        
-        cat_df = con.execute(cat_query).df()
-        
-        if not cat_df.empty and len(cat_df) > 1:
-            fig1 = px.bar(cat_df, x='categoria', y='count',
-                         title="📊 Top 10 Categorias",
-                         color='count',
-                         color_continuous_scale='blues')
-            fig1.update_layout(height=300, showlegend=False)
-            st.plotly_chart(fig1, use_container_width=True)
-    
-    with col_viz2:
-        # Evolução temporal
-        time_query = f"""
-        SELECT 
-            DATE(data_ultima_visita) as data,
-            COUNT(*) as visitas
-        FROM read_parquet('{dataset_info['caminho']}')
-        WHERE {where_clause}
-        GROUP BY DATE(data_ultima_visita)
-        ORDER BY data DESC
-        LIMIT 30
-        """
-        
-        time_df = con.execute(time_query).df()
-        
-        if not time_df.empty and len(time_df) > 1:
-            fig2 = px.line(time_df.sort_values('data'), x='data', y='visitas',
-                          title="📈 Visitas (Últimos 30 dias)",
-                          markers=True)
-            fig2.update_layout(height=300)
-            st.plotly_chart(fig2, use_container_width=True)
-    
-    # ==========================================
-    # PRÉ-VISUALIZAÇÃO DOS DADOS
-    # ==========================================
     with st.expander("👁️ **Pré-visualização dos Dados**", expanded=True):
         preview_query = f"""
         SELECT member_pk, categoria, setor, 

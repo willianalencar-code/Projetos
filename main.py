@@ -108,10 +108,6 @@ def get_dataset_info():
         st.error(f"Erro de conexão: {e}")
         return None
 
-@st.cache_resource(show_spinner=False)
-def get_connection():
-    return duckdb.connect(database=':memory:')
-
 # ==========================================
 # CABEÇALHO
 # ==========================================
@@ -232,27 +228,40 @@ def build_query_conditions():
 # ==========================================
 # ANÁLISE AUTOMÁTICA (SEMPRE EXECUTA)
 # ==========================================
-where_clause = build_query_conditions()
-
-# Query para análise
-con = get_connection()
-analysis_query = f"""
-WITH filtered AS (
-    SELECT * 
-    FROM read_parquet('{dataset_info['caminho']}')
-    WHERE {where_clause}
-)
-SELECT 
-    COUNT(*) as total_registros,
-    COUNT(DISTINCT member_pk) as clientes_unicos,
-    AVG(CASE WHEN data_ultima_compra IS NOT NULL THEN 1 ELSE 0 END) * 100 as taxa_conversao,
-    COALESCE(MIN(data_ultima_visita), CURRENT_DATE) as primeira_visita,
-    COALESCE(MAX(data_ultima_visita), CURRENT_DATE) as ultima_visita
-FROM filtered
-"""
-
-result = con.execute(analysis_query).fetchone()
-total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = result
+try:
+    where_clause = build_query_conditions()
+    
+    # Cria nova conexão DuckDB
+    con = duckdb.connect(database=':memory:')
+    
+    # Query para análise
+    analysis_query = f"""
+    WITH filtered AS (
+        SELECT * 
+        FROM read_parquet('{dataset_info['caminho']}')
+        WHERE {where_clause}
+    )
+    SELECT 
+        COUNT(*) as total_registros,
+        COUNT(DISTINCT member_pk) as clientes_unicos,
+        AVG(CASE WHEN data_ultima_compra IS NOT NULL THEN 1 ELSE 0 END) * 100 as taxa_conversao,
+        COALESCE(MIN(data_ultima_visita), CURRENT_DATE) as primeira_visita,
+        COALESCE(MAX(data_ultima_visita), CURRENT_DATE) as ultima_visita
+    FROM filtered
+    """
+    
+    result = con.execute(analysis_query).fetchone()
+    
+    if result:
+        total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = result
+    else:
+        total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = 0, 0, 0, None, None
+        
+except Exception as e:
+    st.error(f"❌ Erro na análise dos dados: {str(e)}")
+    # Valores padrão em caso de erro
+    total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = 0, 0, 0, None, None
+    con = None
 
 # ==========================================
 # RESUMO DOS RESULTADOS
@@ -273,13 +282,16 @@ with col2:
 
 with col3:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Taxa de Conversão", f"{taxa_conversao:.1f}%")
+    st.metric("Taxa de Conversão", f"{taxa_conversao:.1f}%" if taxa_conversao is not None else "0.0%")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col4:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
     try:
-        periodo_filtrado = f"{primeira_visita.date()} a {ultima_visita.date()}"
+        if primeira_visita and ultima_visita:
+            periodo_filtrado = f"{primeira_visita.date()} a {ultima_visita.date()}"
+        else:
+            periodo_filtrado = "Período disponível"
     except:
         periodo_filtrado = "Período disponível"
     
@@ -289,38 +301,44 @@ with col4:
 # ==========================================
 # PRÉ-VISUALIZAÇÃO DOS DADOS
 # ==========================================
-if total_filtrado > 0:
+if total_filtrado > 0 and con is not None:
     with st.expander("👁️ **Pré-visualização dos Dados**", expanded=True):
-        preview_query = f"""
-        SELECT member_pk, categoria, setor, 
-               data_ultima_visita, data_ultima_compra
-        FROM read_parquet('{dataset_info['caminho']}')
-        WHERE {where_clause}
-        LIMIT 100
-        """
-        
-        preview_df = con.execute(preview_query).df()
-        
-        if not preview_df.empty:
-            # Formatação das datas
-            date_cols = ['data_ultima_visita', 'data_ultima_compra']
-            for col in date_cols:
-                if col in preview_df.columns:
-                    preview_df[col] = pd.to_datetime(preview_df[col], errors='coerce')
+        try:
+            preview_query = f"""
+            SELECT member_pk, categoria, setor, 
+                   data_ultima_visita, data_ultima_compra
+            FROM read_parquet('{dataset_info['caminho']}')
+            WHERE {where_clause}
+            LIMIT 100
+            """
             
-            st.dataframe(
-                preview_df,
-                use_container_width=True,
-                column_config={
-                    "member_pk": "ID Cliente",
-                    "categoria": "Categoria",
-                    "setor": "Setor",
-                    "data_ultima_visita": st.column_config.DatetimeColumn("Última Visita", format="DD/MM/YYYY"),
-                    "data_ultima_compra": st.column_config.DatetimeColumn("Última Compra", format="DD/MM/YYYY")
-                },
-                hide_index=True
-            )
-            st.caption(f"Mostrando 100 de {total_filtrado:,} registros")
+            preview_df = con.execute(preview_query).df()
+            
+            if not preview_df.empty:
+                # Formatação das datas
+                date_cols = ['data_ultima_visita', 'data_ultima_compra']
+                for col in date_cols:
+                    if col in preview_df.columns:
+                        preview_df[col] = pd.to_datetime(preview_df[col], errors='coerce')
+                
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    column_config={
+                        "member_pk": "ID Cliente",
+                        "categoria": "Categoria",
+                        "setor": "Setor",
+                        "data_ultima_visita": st.column_config.DatetimeColumn("Última Visita", format="DD/MM/YYYY"),
+                        "data_ultima_compra": st.column_config.DatetimeColumn("Última Compra", format="DD/MM/YYYY")
+                    },
+                    hide_index=True
+                )
+                st.caption(f"Mostrando 100 de {total_filtrado:,} registros")
+            else:
+                st.info("Nenhum dado para pré-visualizar")
+                
+        except Exception as e:
+            st.error(f"Erro na pré-visualização: {str(e)}")
     
     # ==========================================
     # EXPORTAÇÃO
@@ -380,12 +398,18 @@ if total_filtrado > 0:
                         st.success("✅ Arquivo gerado com sucesso!")
                         
                     except Exception as e:
-                        st.error(f"❌ Erro na exportação: {e}")
+                        st.error(f"❌ Erro na exportação: {str(e)}")
     
-    con.close()
-else:
+    # Fecha a conexão
+    if con:
+        con.close()
+
+elif con is not None:
     st.warning("⚠️ Nenhum registro encontrado com os filtros aplicados.")
     st.info("Tente ajustar os critérios de filtragem.")
+    
+    if con:
+        con.close()
 
 # ==========================================
 # RODAPÉ

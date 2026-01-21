@@ -240,7 +240,7 @@ if dataset_info:
         st.session_state.where_clause = "1=1"
     
     # Botão para estimar resultados
-    if st.sidebar.button("🔄 Calcular Estimativa", key="calc_estimate"):
+    if st.sidebar.button("🔄 Aplicar filtros", key="calc_estimate"):
         with st.spinner("Calculando estimativa..."):
             conditions = build_query_conditions()
             where_clause = " AND ".join(conditions) if conditions else "1=1"

@@ -112,7 +112,7 @@ def get_dataset_info():
 # CABEÇALHO
 # ==========================================
 st.markdown("# 👥 Segmentação de Clientes")
-st.markdown("**Filtre e exporte sua base de clientes de forma inteligente**")
+st.markdown("**Filtre e exporte sua base de clientes**")
 
 # ==========================================
 # CARREGAMENTO DOS DADOS
@@ -132,7 +132,7 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**📋 Filtros Principais**")
+        st.markdown("**Filtros Principais**")
         
         # Busca por ID
         id_busca = st.text_input("Buscar Cliente (ID)", 
@@ -151,10 +151,10 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**📅 Filtros Temporais**")
+        st.markdown("**Filtros de Data**")
         
         # Data de Visita
-        st.markdown("##### Última Visita")
+        st.markdown("**Última Visita**")
         col1, col2 = st.columns(2)
         with col1:
             data_inicio_visita = st.date_input("De", 
@@ -168,7 +168,7 @@ with st.sidebar:
                                            label_visibility="collapsed")
         
         # Data de Compra
-        st.markdown("##### Última Compra")
+        st.markdown("**Última Compra**")
         usar_compra = st.toggle("Ativar filtro", value=False, key="toggle_compra")
         
         if usar_compra:
@@ -191,10 +191,10 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**⚙️ Configurações**")
+        st.markdown("**Configurações de Exportação**")
         
         only_member_pk = st.checkbox("Exportar apenas IDs", value=False)
-        export_format = st.radio("Formato de Saída:", 
+        export_format = st.radio("Formato:", 
                                 ["CSV", "Excel"], 
                                 horizontal=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -234,7 +234,7 @@ try:
     # Cria nova conexão DuckDB
     con = duckdb.connect(database=':memory:')
     
-    # Query para análise
+    # Query simplificada (SEM taxa de conversão)
     analysis_query = f"""
     WITH filtered AS (
         SELECT * 
@@ -244,35 +244,34 @@ try:
     SELECT 
         COUNT(*) as total_registros,
         COUNT(DISTINCT member_pk) as clientes_unicos,
-        AVG(CASE WHEN data_ultima_compra IS NOT NULL THEN 1 ELSE 0 END) * 100 as taxa_conversao,
-        COALESCE(MIN(data_ultima_visita), CURRENT_DATE) as primeira_visita,
-        COALESCE(MAX(data_ultima_visita), CURRENT_DATE) as ultima_visita
+        MIN(data_ultima_visita) as primeira_visita,
+        MAX(data_ultima_visita) as ultima_visita
     FROM filtered
     """
     
     result = con.execute(analysis_query).fetchone()
     
     if result:
-        total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = result
+        total_filtrado, clientes_unicos, primeira_visita, ultima_visita = result
     else:
-        total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = 0, 0, 0, None, None
+        total_filtrado, clientes_unicos, primeira_visita, ultima_visita = 0, 0, None, None
         
 except Exception as e:
     st.error(f"❌ Erro na análise dos dados: {str(e)}")
     # Valores padrão em caso de erro
-    total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = 0, 0, 0, None, None
+    total_filtrado, clientes_unicos, primeira_visita, ultima_visita = 0, 0, None, None
     con = None
 
 # ==========================================
-# RESUMO DOS RESULTADOS
+# RESUMO DOS RESULTADOS (3 COLUNAS APENAS)
 # ==========================================
-st.markdown("### 📈 Resultados da Filtragem")
+st.markdown("### 📊 Resultados")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Registros Encontrados", f"{total_filtrado:,}")
+    st.metric("Registros", f"{total_filtrado:,}")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
@@ -282,11 +281,6 @@ with col2:
 
 with col3:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Taxa de Conversão", f"{taxa_conversao:.1f}%" if taxa_conversao is not None else "0.0%")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col4:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
     try:
         if primeira_visita and ultima_visita:
             periodo_filtrado = f"{primeira_visita.date()} a {ultima_visita.date()}"
@@ -295,7 +289,7 @@ with col4:
     except:
         periodo_filtrado = "Período disponível"
     
-    st.metric("Período Filtrado", periodo_filtrado)
+    st.metric("Período", periodo_filtrado)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================

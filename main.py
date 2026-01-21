@@ -2,28 +2,113 @@ import streamlit as st
 import duckdb
 from huggingface_hub import hf_hub_download
 import pandas as pd
-import os
 import tempfile
 from datetime import datetime
 import pyarrow.parquet as pq
 import warnings
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# CONFIGURAÇÃO DA PÁGINA
+# CONFIGURAÇÃO DA PÁGINA - MODERNA
 # ==========================================
 st.set_page_config(
-    page_title="Exportador de Clientes 7M",
+    page_title="🔍 Segmentação de Clientes",
     layout="wide",
-    page_icon="🚀"
+    page_icon="👥",
+    initial_sidebar_state="collapsed"
 )
 
 # ==========================================
-# CACHE E CONEXÃO OTIMIZADOS
+# ESTILO CSS PERSONALIZADO
+# ==========================================
+st.markdown("""
+<style>
+    /* Estilo minimalista */
+    .main {
+        padding: 1rem 2rem;
+    }
+    
+    /* Cabeçalhos */
+    h1, h2, h3 {
+        color: #1E3A8A;
+        font-weight: 600;
+        margin-top: 0;
+    }
+    
+    /* Cards */
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border-left: 4px solid #3B82F6;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        margin-bottom: 1rem;
+    }
+    
+    .filter-card {
+        background: #F8FAFC;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid #E2E8F0;
+        margin-bottom: 1rem;
+    }
+    
+    /* Botões */
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px;
+        border: none;
+        font-weight: 600;
+        transition: all 0.3s;
+    }
+    
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+    }
+    
+    /* Inputs */
+    .stSelectbox, .stMultiselect, .stDateInput, .stTextInput {
+        margin-bottom: 0.5rem;
+    }
+    
+    /* Badges */
+    .status-badge {
+        display: inline-block;
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+    
+    .status-active {
+        background: #D1FAE5;
+        color: #065F46;
+    }
+    
+    .status-inactive {
+        background: #FEE2E2;
+        color: #991B1B;
+    }
+    
+    /* Separador */
+    .divider {
+        border-top: 2px solid #E2E8F0;
+        margin: 2rem 0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# FUNÇÕES CACHE OTIMIZADAS
 # ==========================================
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_dataset_info():
-    """Obtém apenas informações do dataset SEM usar DuckDB para contagem"""
+    """Obtém informações do dataset de forma eficiente"""
     try:
         token = st.secrets.get("HF_TOKEN", "")
         caminho_local = hf_hub_download(
@@ -33,118 +118,53 @@ def get_dataset_info():
             token=token if token else None
         )
         
-        # ==========================================
-        # CONTAGEM PRECISA usando pyarrow (NÃO DuckDB)
-        # ==========================================
-        
-        # Método 1: Contagem via metadados (SUPER rápido)
+        # Contagem via metadados
         parquet_file = pq.ParquetFile(caminho_local)
         num_rows = parquet_file.metadata.num_rows
         
-        print(f"📊 Contagem via metadados Parquet: {num_rows:,}")
-        
-        # Método 2: Verificação rápida de member_pk únicos
-        # Lê APENAS a coluna member_pk para contagem precisa
-        import pyarrow.dataset as ds
-        
-        dataset = ds.dataset(caminho_local, format="parquet")
-        
-        # Conta member_pk distintos com pyarrow (eficiente)
-        member_pk_counts = dataset.to_table(
-            columns=['member_pk']
-        ).column('member_pk').value_counts()
-        
-        unique_members = len(member_pk_counts)
-        
-        # ==========================================
-        # Para categorias/setores, ainda usa DuckDB (mas com limite)
-        # ==========================================
-        
+        # Carrega amostra para análise
         con = duckdb.connect(database=':memory:')
         
-        # Obtém categorias únicas (amostra)
-        try:
-            categorias_df = con.execute(f"""
-                SELECT DISTINCT categoria 
-                FROM read_parquet('{caminho_local}') 
-                WHERE categoria IS NOT NULL 
-                LIMIT 500
-            """).df()
-            categorias = categorias_df['categoria'].tolist()
-        except:
-            categorias = []
+        # Amostra para análise
+        sample_query = f"""
+        SELECT 
+            categoria,
+            setor,
+            data_ultima_visita,
+            data_ultima_compra,
+            COUNT(*) as count
+        FROM read_parquet('{caminho_local}')
+        GROUP BY 1,2,3,4
+        LIMIT 10000
+        """
         
-        # Obtém setores únicos (amostra)
-        try:
-            setores_df = con.execute(f"""
-                SELECT DISTINCT setor 
-                FROM read_parquet('{caminho_local}') 
-                WHERE setor IS NOT NULL 
-                LIMIT 500
-            """).df()
-            setores = setores_df['setor'].tolist()
-        except:
-            setores = []
+        sample_df = con.execute(sample_query).df()
         
-        # ==========================================
-        # Datas min/max com DuckDB MAS com verificação
-        # ==========================================
+        # Informações básicas
+        categorias = sample_df['categoria'].dropna().unique().tolist()[:20]
+        setores = sample_df['setor'].dropna().unique().tolist()[:20]
         
-        try:
-            dates_df = con.execute(f"""
-                SELECT 
-                    MIN(data_ultima_visita) as min_visita,
-                    MAX(data_ultima_visita) as max_visita,
-                    MIN(data_ultima_compra) as min_compra,
-                    MAX(data_ultima_compra) as max_compra
-                FROM read_parquet('{caminho_local}')
-            """).df()
-            
-            min_visita = dates_df['min_visita'].iloc[0]
-            max_visita = dates_df['max_visita'].iloc[0]
-            min_compra = dates_df['min_compra'].iloc[0]
-            max_compra = dates_df['max_compra'].iloc[0]
-            
-            # VERIFICAÇÃO: Se as datas forem absurdas, usa fallback
-            if pd.isna(min_visita) or max_visita.year < 2000:
-                min_visita = pd.Timestamp('2020-01-01')
-                max_visita = pd.Timestamp.now()
-                
-            if pd.isna(min_compra) or max_compra.year < 2000:
-                min_compra = pd.Timestamp('2020-01-01')
-                max_compra = pd.Timestamp.now()
-                
-        except Exception as date_error:
-            print(f"⚠️ Erro nas datas: {date_error}")
-            min_visita = pd.Timestamp('2020-01-01')
-            max_visita = pd.Timestamp.now()
-            min_compra = pd.Timestamp('2020-01-01')
-            max_compra = pd.Timestamp.now()
+        # Datas
+        min_visita = sample_df['data_ultima_visita'].min()
+        max_visita = sample_df['data_ultima_visita'].max()
+        min_compra = sample_df['data_ultima_compra'].min()
+        max_compra = sample_df['data_ultima_compra'].max()
         
         con.close()
         
-        # LOG DE VERIFICAÇÃO
-        print(f"✅ Contagem final: {num_rows:,} registros")
-        print(f"✅ Member_pk únicos: {unique_members:,}")
-        print(f"✅ Datas visita: {min_visita.date()} a {max_visita.date()}")
-        print(f"✅ Datas compra: {min_compra.date()} a {max_compra.date()}")
-        
         return {
             'caminho': caminho_local,
-            'num_rows': num_rows,  # AGORA CORRETO: 31,839,403
-            'unique_members': unique_members,  # 2,949,380
+            'num_rows': num_rows,
             'categorias': sorted(categorias),
             'setores': sorted(setores),
-            'min_visita': min_visita,
-            'max_visita': max_visita,
-            'min_compra': min_compra,
-            'max_compra': max_compra
+            'min_visita': pd.Timestamp(min_visita) if pd.notna(min_visita) else pd.Timestamp('2020-01-01'),
+            'max_visita': pd.Timestamp(max_visita) if pd.notna(max_visita) else pd.Timestamp.now(),
+            'min_compra': pd.Timestamp(min_compra) if pd.notna(min_compra) else pd.Timestamp('2020-01-01'),
+            'max_compra': pd.Timestamp(max_compra) if pd.notna(max_compra) else pd.Timestamp.now()
         }
         
     except Exception as e:
         st.error(f"Erro de conexão: {e}")
-        import traceback
-        st.code(traceback.format_exc())
         return None
 
 @st.cache_resource(show_spinner=False)
@@ -152,479 +172,407 @@ def get_connection():
     return duckdb.connect(database=':memory:')
 
 # ==========================================
-# INICIALIZAÇÃO OTIMIZADA
+# CABEÇALHO MODERNO
 # ==========================================
-st.title("📋 Gestão e Exportação de Clientes")
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.markdown("# 👥 Segmentação de Clientes")
+    st.markdown("**Filtre e exporte sua base de clientes de forma inteligente**")
+with col2:
+    st.markdown("")
+    if st.button("🔄 Atualizar Dados", type="secondary"):
+        st.cache_data.clear()
+        st.rerun()
 
-# Carrega apenas informações do dataset
-with st.spinner("Carregando informações do dataset..."):
+# ==========================================
+# CARREGAMENTO DOS DADOS
+# ==========================================
+with st.spinner("📦 Carregando informações..."):
     dataset_info = get_dataset_info()
 
-if dataset_info:
-    # ==========================================
-    # SIDEBAR - FILTROS
-    # ==========================================
-    st.sidebar.header("🔍 Filtros")
-    
-    # member_pk
-    id_busca = st.sidebar.text_input("Buscar por member_pk:", key="id_busca")
-    
-    # categorias
-    categorias = dataset_info['categorias']
-    cat_sel = st.sidebar.multiselect("Categorias:", categorias, key="cat_sel")
-    
-    # setores
-    setores = dataset_info['setores']
-    setor_sel = st.sidebar.multiselect("Setores:", setores, key="setor_sel")
-    
-    # Filtros de data
-    st.sidebar.subheader("📅 Filtros por Data")
-    
-    # Última visita
-    col1, col2 = st.sidebar.columns(2)
-    
-    with col1:
-        data_inicio_visita = st.date_input(
-            "Data início visita",
-            value=dataset_info['min_visita'].date(),
-            key="data_inicio_visita"
-        )
-    
-    with col2:
-        data_fim_visita = st.date_input(
-            "Data fim visita",
-            value=dataset_info['max_visita'].date(),
-            key="data_fim_visita"
-        )
-    
-    # Última compra - COM CHECKBOX PARA ATIVAR/DESATIVAR
-    st.sidebar.markdown("---")
-    usar_filtro_compra = st.sidebar.checkbox(
-        "Usar filtro de data da última compra", 
-        value=False,
-        help="Marque esta opção para filtrar por data da última compra. Desmarque para ignorar este filtro."
-    )
-    
-    if usar_filtro_compra:
-        col3, col4 = st.sidebar.columns(2)
-        
-        with col3:
-            data_inicio_compra = st.date_input(
-                "Data início compra",
-                value=dataset_info['min_compra'].date(),
-                key="data_inicio_compra"
-            )
-        
-        with col4:
-            data_fim_compra = st.date_input(
-                "Data fim compra",
-                value=dataset_info['max_compra'].date(),
-                key="data_fim_compra"
-            )
-    else:
-        # Define valores padrão quando o filtro está desativado
-        data_inicio_compra = None
-        data_fim_compra = None
-    
-    # opção somente member_pk
-    only_member_pk = st.sidebar.checkbox("Exportar apenas member_pk", value=False)
-    
-    # ==========================================
-    # CONSTRUÇÃO DA QUERY COM PROCESSAMENTO EM LOTES
-    # ==========================================
-    def build_query_conditions():
-        conditions = []
-        
-        if id_busca and id_busca.strip():
-            try:
-                # Tenta converter para inteiro se possível
-                int(id_busca)
-                conditions.append(f"member_pk = {id_busca}")
-            except:
-                conditions.append(f"CAST(member_pk AS VARCHAR) LIKE '%{id_busca}%'")
-        
-        if cat_sel:
-            cat_list = ', '.join([f"'{c}'" for c in cat_sel])
-            conditions.append(f"categoria IN ({cat_list})")
-        
-        if setor_sel:
-            setor_list = ', '.join([f"'{s}'" for s in setor_sel])
-            conditions.append(f"setor IN ({setor_list})")
-        
-        # Filtro de data da última visita (sempre aplicado)
-        conditions.append(f"data_ultima_visita >= '{data_inicio_visita}'")
-        conditions.append(f"data_ultima_visita <= '{data_fim_visita}'")
-        
-        # Filtro de data da última compra (só se ativado)
-        if usar_filtro_compra and data_inicio_compra and data_fim_compra:
-            conditions.append(f"data_ultima_compra >= '{data_inicio_compra}'")
-            conditions.append(f"data_ultima_compra <= '{data_fim_compra}'")
-        
-        return conditions
-    
-    # ==========================================
-    # ESTIMATIVA DE RESULTADOS
-    # ==========================================
-    st.sidebar.header("📊 Estatísticas")
-    
-    # Inicializa session_state se não existir
-    if 'total_filtrado' not in st.session_state:
-        st.session_state.total_filtrado = 0
-        st.session_state.unique_members_filtrado = 0
-        st.session_state.where_clause = "1=1"
-    
-    # Botão para estimar resultados
-    if st.sidebar.button("🔄 Aplicar filtros", key="calc_estimate"):
-        with st.spinner("Calculando estimativa..."):
-            conditions = build_query_conditions()
-            where_clause = " AND ".join(conditions) if conditions else "1=1"
-            
-            # Query para contar resultados
-            count_query = f"""
-            SELECT 
-                COUNT(*) as total_registros,
-                COUNT(DISTINCT member_pk) as unique_members
-            FROM read_parquet('{dataset_info['caminho']}')
-            WHERE {where_clause}
-            """
-            
-            try:
-                con = get_connection()
-                result = con.execute(count_query).fetchone()
-                total_filtrado = result[0]
-                unique_members_filtrado = result[1]
-                
-                st.session_state.total_filtrado = total_filtrado
-                st.session_state.unique_members_filtrado = unique_members_filtrado
-                st.session_state.where_clause = where_clause
-                
-                st.sidebar.success(f"Estimativa: {total_filtrado:,} registros")
-                st.sidebar.success(f"Clientes únicos: {unique_members_filtrado:,}")
-                
-            except Exception as e:
-                st.sidebar.error(f"Erro na contagem: {e}")
-                st.session_state.total_filtrado = 0
-                st.session_state.unique_members_filtrado = 0
-    
-    # Mostra estimativa se existir
-    if 'total_filtrado' in st.session_state and st.session_state.total_filtrado > 0:
-        total_filtrado = st.session_state.total_filtrado
-        unique_members_filtrado = st.session_state.unique_members_filtrado
-        where_clause = st.session_state.where_clause
-        
-        # Ajusta formato de exportação baseado no tamanho
-        if total_filtrado > 100000:
-            export_format = "CSV"
-            st.sidebar.warning(f"⚠️ {total_filtrado:,} registros - CSV recomendado")
-        else:
-            export_format = st.sidebar.selectbox(
-                "Formato de exportação:",
-                ["CSV", "Excel (.xlsx)"],
-                key="export_format"
-            )
-        
-        st.sidebar.metric("Registros filtrados", f"{total_filtrado:,}")
-        st.sidebar.metric("Clientes únicos", f"{unique_members_filtrado:,}")
-    else:
-        total_filtrado = st.session_state.total_filtrado
-        unique_members_filtrado = st.session_state.unique_members_filtrado
-        export_format = "CSV"
-        where_clause = st.session_state.where_clause
-    
-    st.sidebar.metric("Total na base", f"{dataset_info['num_rows']:,}")
-    
-    # ==========================================
-    # MÉTRICAS PRINCIPAIS - AJUSTADO PARA MOSTRAR DADOS FILTRADOS
-    # ==========================================
-    st.subheader("📈 Métricas da Consulta")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    # Total de registros filtrados
-    with col1:
-        st.metric(
-            label="📊 Registros filtrados",
-            value=f"{total_filtrado:,}",
-            delta=f"{total_filtrado - dataset_info['num_rows']:,}" if total_filtrado != dataset_info['num_rows'] else None,
-            delta_color="normal"
-        )
-    
-    # Clientes únicos filtrados
-    with col2:
-        st.metric(
-            label="👥 Clientes únicos (filtrados)",
-            value=f"{unique_members_filtrado:,}",
-            delta=f"{unique_members_filtrado - dataset_info['unique_members']:,}" if unique_members_filtrado != dataset_info['unique_members'] else None,
-            delta_color="normal"
-        )
-    
-    # Status do filtro de compra
-    with col3:
-        if usar_filtro_compra:
-            status_filtro = "✅ Ativo"
-            delta_text = f"{data_inicio_compra} a {data_fim_compra}"
-        else:
-            status_filtro = "❌ Inativo"
-            delta_text = None
-        
-        st.metric(
-            label="🎯 Filtro de compra",
-            value=status_filtro,
-            delta=delta_text
-        )
-    
-    # ==========================================
-    # MÉTRICAS DA BASE COMPLETA (em expander)
-    # ==========================================
-    with st.expander("📋 Informações da Base Completa"):
-        col_base1, col_base2 = st.columns(2)
-        
-        with col_base1:
-            st.metric(
-                label="📦 Total da base",
-                value=f"{dataset_info['num_rows']:,}",
-                help="Número total de registros no dataset"
-            )
-        
-        with col_base2:
-            st.metric(
-                label="👤 Clientes únicos totais",
-                value=f"{dataset_info['unique_members']:,}",
-                help="Número total de member_pk distintos na base completa"
-            )
-        
-        st.info(f"**Período de visitas:** {dataset_info['min_visita'].date()} a {dataset_info['max_visita'].date()}")
-        st.info(f"**Período de compras:** {dataset_info['min_compra'].date()} a {dataset_info['max_compra'].date()}")
-    
-    # ==========================================
-    # PRÉ-VISUALIZAÇÃO OTIMIZADA
-    # ==========================================
-    st.subheader("📋 Pré-visualização (50 linhas)")
-    
-    # Query para preview otimizada
-    select_cols = "member_pk" if only_member_pk else "*"
-    
-    if 'where_clause' in st.session_state and st.session_state.total_filtrado > 0:
-        preview_query = f"""
-        SELECT {select_cols}
-        FROM read_parquet('{dataset_info['caminho']}')
-        WHERE {where_clause}
-        LIMIT 50
-        """
-        
-        try:
-            con = get_connection()
-            df_preview = con.execute(preview_query).df()
-            
-            if not df_preview.empty:
-                # Formata colunas de data
-                date_cols = ['data_ultima_visita', 'data_ultima_compra']
-                for col in date_cols:
-                    if col in df_preview.columns:
-                        # Converte para datetime
-                        df_preview[col] = pd.to_datetime(df_preview[col], errors='coerce')
-                
-                # Mostra dataframe
-                st.dataframe(
-                    df_preview,
-                    use_container_width=True,
-                    column_config={
-                        "data_ultima_compra": st.column_config.DatetimeColumn(
-                            "Última compra",
-                            format="DD/MM/YYYY",
-                        ),
-                        "data_ultima_visita": st.column_config.DatetimeColumn(
-                            "Última visita",
-                            format="DD/MM/YYYY",
-                        ),
-                    }
-                )
-                st.caption(f"Mostrando 50 de {total_filtrado:,} registros ({unique_members_filtrado:,} clientes únicos)")
-                
-            else:
-                st.info("Nenhum resultado encontrado com os filtros atuais.")
-                
-        except Exception as e:
-            st.error(f"Erro na pré-visualização: {e}")
-    else:
-        st.info("Configure os filtros e clique em 'Calcular Estimativa' para ver a pré-visualização.")
-    
-    # ==========================================
-    # EXPORTAÇÃO
-    # ==========================================
-    st.header("📤 Exportação")
-    
-    if 'total_filtrado' in st.session_state and st.session_state.total_filtrado > 0:
-        total_filtrado = st.session_state.total_filtrado
-        unique_members_filtrado = st.session_state.unique_members_filtrado
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Determina extensão baseada no formato
-        if export_format == "Excel (.xlsx)":
-            file_ext = "xlsx"
-            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        else:
-            file_ext = "csv"
-            mime_type = "text/csv"
-        
-        file_name = f"clientes_{timestamp}.{file_ext}"
-        
-        st.info(f"📄 Nome do arquivo: **{file_name}**")
-        st.info(f"📊 Total de registros: **{total_filtrado:,}**")
-        st.info(f"👥 Clientes únicos: **{unique_members_filtrado:,}**")
-        
-        # Informações sobre o filtro aplicado
-        if usar_filtro_compra:
-            st.info(f"🎯 **Filtro compra:** {data_inicio_compra} a {data_fim_compra}")
-        else:
-            st.info("🎯 **Filtro compra:** Desativado")
-        
-        # Limite para Excel
-        if total_filtrado > 1000000 and export_format == "Excel (.xlsx)":
-            st.error("❌ Não é possível exportar mais de 1 milhão de registros em Excel.")
-            st.error("Por favor, altere o formato para CSV.")
-        else:
-            if st.button("🚀 INICIAR EXPORTAÇÃO", type="primary", use_container_width=True):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                try:
-                    # Cria arquivo temporário
-                    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_ext}")
-                    tmp_path = tmp_file.name
-                    tmp_file.close()
-                    
-                    # Conecta ao DuckDB
-                    con = get_connection()
-                    
-                    # Query para exportação
-                    select_cols = "member_pk" if only_member_pk else "*"
-                    export_query = f"""
-                    SELECT {select_cols}
-                    FROM read_parquet('{dataset_info['caminho']}')
-                    WHERE {where_clause}
-                    """
-                    
-                    status_text.text(f"Iniciando exportação de {total_filtrado:,} registros...")
-                    
-                    if export_format == "Excel (.xlsx)":
-                        # Para Excel, processamos tudo de uma vez (apenas para volumes menores)
-                        status_text.text("Exportando para Excel...")
-                        
-                        df_export = con.execute(export_query).df()
-                        
-                        # Verifica se o dataframe não está vazio
-                        if not df_export.empty:
-                            # Exporta para Excel
-                            with pd.ExcelWriter(tmp_path, engine='openpyxl') as writer:
-                                df_export.to_excel(writer, index=False, sheet_name='Clientes')
-                            
-                            progress_bar.progress(1.0)
-                        else:
-                            st.error("Nenhum dado para exportar!")
-                            progress_bar.empty()
-                            status_text.empty()
-                            st.stop()
-                    
-                    else:
-                        # Para CSV, processamos em lotes
-                        status_text.text("Exportando em lotes (CSV)...")
-                        
-                        # Configura lote
-                        batch_size = 100000
-                        first_batch = True
-                        processed_rows = 0
-                        
-                        # Exporta em lotes usando iterator
-                        result = con.execute(export_query)
-                        
-                        batch_count = 0
-                        while True:
-                            batch = result.fetch_df_chunk(batch_size)
-                            if batch.empty:
-                                break
-                            
-                            batch_count += 1
-                            
-                            if first_batch:
-                                batch.to_csv(tmp_path, index=False)
-                                first_batch = False
-                            else:
-                                batch.to_csv(tmp_path, mode='a', header=False, index=False)
-                            
-                            processed_rows += len(batch)
-                            progress = min(processed_rows / total_filtrado, 1.0)
-                            progress_bar.progress(progress)
-                            status_text.text(f"Lote {batch_count}: {processed_rows:,} de {total_filtrado:,} registros")
-                    
-                    # Obtém tamanho do arquivo
-                    file_size = os.path.getsize(tmp_path) / (1024*1024)
-                    
-                    # Prepara download
-                    with open(tmp_path, 'rb') as f:
-                        file_data = f.read()
-                    
-                    os.unlink(tmp_path)
-                    
-                    progress_bar.empty()
-                    status_text.empty()
-                    
-                    st.success(f"✅ Exportação concluída! Tamanho: {file_size:.2f} MB")
-                    
-                    # Botão de download
-                    st.download_button(
-                        label=f"📥 BAIXAR {file_ext.upper()} ({file_size:.2f} MB)",
-                        data=file_data,
-                        file_name=file_name,
-                        mime=mime_type,
-                        use_container_width=True
-                    )
-                    
-                except Exception as e:
-                    st.error(f"❌ Erro durante exportação: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-    
-    elif 'total_filtrado' in st.session_state and st.session_state.total_filtrado == 0:
-        st.warning("Nenhum registro encontrado com os filtros aplicados.")
-    else:
-        st.info("Configure os filtros e clique em 'Calcular Estimativa' para habilitar a exportação.")
-    
-else:
-    st.warning("""
-    ⚠️ **Configuração necessária:**
-    
-    1. Adicione seu token do Hugging Face nas secrets do Streamlit Cloud
-    2. Acesse: Settings → Secrets
-    3. Adicione: `HF_TOKEN = "seu_token_aqui"`
-    
-    Obtenha seu token em: https://huggingface.co/settings/tokens
-    """)
+if not dataset_info:
+    st.error("❌ Não foi possível carregar os dados. Verifique sua conexão.")
+    st.stop()
 
 # ==========================================
-# DICAS DE PERFORMANCE
+# VISÃO GERAL - CARDS DE MÉTRICAS
 # ==========================================
-with st.expander("💡 Dicas para melhor performance"):
-    st.markdown("""
-    **Para datasets grandes (188MB+):**
+st.markdown("### 📊 Visão Geral da Base")
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    st.metric("Total de Registros", f"{dataset_info['num_rows']:,}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col2:
+    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    st.metric("Categorias", len(dataset_info['categorias']))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col3:
+    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    st.metric("Setores", len(dataset_info['setores']))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col4:
+    periodo = f"{dataset_info['min_visita'].date()} a {dataset_info['max_visita'].date()}"
+    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+    st.metric("Período", periodo[:20] + "..." if len(periodo) > 20 else periodo)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# SEÇÃO DE FILTROS - SIDEBAR ESTILIZADA
+# ==========================================
+with st.sidebar:
+    st.markdown("### 🔍 Filtros Avançados")
     
-    1. **Use filtros específicos** - Limite os resultados antes de exportar
-    2. **Prefira CSV para grandes volumes** - Mais eficiente que Excel
-    3. **Exporte apenas member_pk** - Marque "Exportar apenas member_pk" para arquivos menores
-    4. **Use intervalos de data** - Filtre por período específico
-    5. **Calcule estimativa primeiro** - Evite exportar dados indesejados
+    # Filtros em cards
+    with st.container():
+        st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+        st.markdown("**📋 Filtros Principais**")
+        
+        # Busca por ID
+        id_busca = st.text_input("Buscar Cliente (ID)", 
+                                 placeholder="Digite o member_pk...")
+        
+        # Categorias
+        cat_sel = st.multiselect("Categorias", 
+                                dataset_info['categorias'],
+                                placeholder="Selecione categorias...")
+        
+        # Setores
+        setor_sel = st.multiselect("Setores", 
+                                  dataset_info['setores'],
+                                  placeholder="Selecione setores...")
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    **Formato de exportação:**
-    - ✅ **CSV**: Recomendado para mais de 100.000 registros
-    - ✅ **Excel**: Adequado para até 100.000 registros
+    # Filtros de Data
+    with st.container():
+        st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+        st.markdown("**📅 Filtros Temporais**")
+        
+        # Data de Visita
+        st.markdown("##### Última Visita")
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio_visita = st.date_input("De", 
+                                              value=dataset_info['min_visita'].date(),
+                                              key="inicio_visita",
+                                              label_visibility="collapsed")
+        with col2:
+            data_fim_visita = st.date_input("Até", 
+                                           value=dataset_info['max_visita'].date(),
+                                           key="fim_visita",
+                                           label_visibility="collapsed")
+        
+        # Data de Compra (com toggle)
+        st.markdown("##### Última Compra")
+        usar_compra = st.toggle("Ativar filtro", value=False, key="toggle_compra")
+        
+        if usar_compra:
+            col3, col4 = st.columns(2)
+            with col3:
+                data_inicio_compra = st.date_input("De", 
+                                                  value=dataset_info['min_compra'].date(),
+                                                  key="inicio_compra",
+                                                  label_visibility="collapsed")
+            with col4:
+                data_fim_compra = st.date_input("Até", 
+                                               value=dataset_info['max_compra'].date(),
+                                               key="fim_compra",
+                                               label_visibility="collapsed")
+        else:
+            data_inicio_compra = None
+            data_fim_compra = None
+            
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    **Filtro de última compra:**
-    - ✅ **Desmarque a checkbox** para ignorar completamente o filtro de compra
-    - ✅ **Marque a checkbox** para ativar o filtro por data de compra
+    # Opções de Exportação
+    with st.container():
+        st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+        st.markdown("**⚙️ Configurações**")
+        
+        only_member_pk = st.checkbox("Exportar apenas IDs", value=False)
+        export_format = st.radio("Formato de Saída:", 
+                                ["CSV", "Excel"], 
+                                horizontal=True)
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    **Limitações do Streamlit Cloud:**
-    - Memória limitada (1GB no plano gratuito)
-    - Processamento otimizado para lotes
-    - Cache inteligente para queries repetidas
-    """)
+    # Botão de Ação Principal
+    if st.button("🎯 Aplicar Filtros & Analisar", type="primary", use_container_width=True):
+        st.session_state.filtro_aplicado = True
+
+# ==========================================
+# FUNÇÕES DE PROCESSAMENTO
+# ==========================================
+def build_query_conditions():
+    conditions = []
+    
+    if id_busca and id_busca.strip():
+        conditions.append(f"member_pk = '{id_busca}'")
+    
+    if cat_sel:
+        cat_list = ', '.join([f"'{c}'" for c in cat_sel])
+        conditions.append(f"categoria IN ({cat_list})")
+    
+    if setor_sel:
+        setor_list = ', '.join([f"'{s}'" for s in setor_sel])
+        conditions.append(f"setor IN ({setor_list})")
+    
+    conditions.append(f"data_ultima_visita >= '{data_inicio_visita}'")
+    conditions.append(f"data_ultima_visita <= '{data_fim_visita}'")
+    
+    if usar_compra and data_inicio_compra and data_fim_compra:
+        conditions.append(f"data_ultima_compra >= '{data_inicio_compra}'")
+        conditions.append(f"data_ultima_compra <= '{data_fim_compra}'")
+    
+    return " AND ".join(conditions) if conditions else "1=1"
+
+# ==========================================
+# ANÁLISE DOS RESULTADOS FILTRADOS
+# ==========================================
+if 'filtro_aplicado' in st.session_state and st.session_state.filtro_aplicado:
+    where_clause = build_query_conditions()
+    
+    # Query para análise
+    con = get_connection()
+    analysis_query = f"""
+    WITH filtered AS (
+        SELECT * 
+        FROM read_parquet('{dataset_info['caminho']}')
+        WHERE {where_clause}
+    )
+    SELECT 
+        COUNT(*) as total_registros,
+        COUNT(DISTINCT member_pk) as clientes_unicos,
+        AVG(CASE WHEN data_ultima_compra IS NOT NULL THEN 1 ELSE 0 END) * 100 as taxa_conversao,
+        MIN(data_ultima_visita) as primeira_visita,
+        MAX(data_ultima_visita) as ultima_visita
+    FROM filtered
+    """
+    
+    result = con.execute(analysis_query).fetchone()
+    
+    if result[0] > 0:
+        total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita = result
+        
+        # ==========================================
+        # RESUMO DOS RESULTADOS
+        # ==========================================
+        st.markdown("### 📈 Resultados da Filtragem")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Registros Encontrados", f"{total_filtrado:,}")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Clientes Únicos", f"{clientes_unicos:,}")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Taxa de Conversão", f"{taxa_conversao:.1f}%")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            periodo_filtrado = f"{primeira_visita.date()} a {ultima_visita.date()}"
+            st.metric("Período Filtrado", periodo_filtrado)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # ==========================================
+        # VISUALIZAÇÕES
+        # ==========================================
+        col_viz1, col_viz2 = st.columns(2)
+        
+        with col_viz1:
+            # Distribuição por categoria
+            cat_query = f"""
+            SELECT categoria, COUNT(*) as count
+            FROM read_parquet('{dataset_info['caminho']}')
+            WHERE {where_clause}
+            GROUP BY categoria
+            ORDER BY count DESC
+            LIMIT 10
+            """
+            
+            cat_df = con.execute(cat_query).df()
+            
+            if not cat_df.empty:
+                fig1 = px.bar(cat_df, x='categoria', y='count',
+                             title="📊 Top 10 Categorias",
+                             color='count',
+                             color_continuous_scale='blues')
+                fig1.update_layout(height=300, showlegend=False)
+                st.plotly_chart(fig1, use_container_width=True)
+        
+        with col_viz2:
+            # Evolução temporal
+            time_query = f"""
+            SELECT 
+                DATE(data_ultima_visita) as data,
+                COUNT(*) as visitas
+            FROM read_parquet('{dataset_info['caminho']}')
+            WHERE {where_clause}
+            GROUP BY DATE(data_ultima_visita)
+            ORDER BY data
+            LIMIT 30
+            """
+            
+            time_df = con.execute(time_query).df()
+            
+            if not time_df.empty:
+                fig2 = px.line(time_df, x='data', y='visitas',
+                              title="📈 Visitas (Últimos 30 dias)",
+                              markers=True)
+                fig2.update_layout(height=300)
+                st.plotly_chart(fig2, use_container_width=True)
+        
+        # ==========================================
+        # PRÉ-VISUALIZAÇÃO DOS DADOS
+        # ==========================================
+        with st.expander("👁️ **Pré-visualização dos Dados**", expanded=True):
+            preview_query = f"""
+            SELECT member_pk, categoria, setor, 
+                   data_ultima_visita, data_ultima_compra
+            FROM read_parquet('{dataset_info['caminho']}')
+            WHERE {where_clause}
+            LIMIT 100
+            """
+            
+            preview_df = con.execute(preview_query).df()
+            
+            if not preview_df.empty:
+                # Formatação das datas
+                preview_df['data_ultima_visita'] = pd.to_datetime(preview_df['data_ultima_visita']).dt.strftime('%d/%m/%Y')
+                preview_df['data_ultima_compra'] = pd.to_datetime(preview_df['data_ultima_compra']).dt.strftime('%d/%m/%Y')
+                
+                st.dataframe(
+                    preview_df,
+                    use_container_width=True,
+                    column_config={
+                        "member_pk": "ID Cliente",
+                        "categoria": "Categoria",
+                        "setor": "Setor",
+                        "data_ultima_visita": "Última Visita",
+                        "data_ultima_compra": "Última Compra"
+                    },
+                    hide_index=True
+                )
+                st.caption(f"Mostrando 100 de {total_filtrado:,} registros")
+        
+        # ==========================================
+        # EXPORTAÇÃO
+        # ==========================================
+        st.markdown("### 📤 Exportação")
+        
+        col_exp1, col_exp2 = st.columns([3, 1])
+        
+        with col_exp1:
+            st.info(f"**Pronto para exportar:** {total_filtrado:,} registros • {clientes_unicos:,} clientes únicos")
+        
+        with col_exp2:
+            export_disabled = total_filtrado > 1000000 and export_format == "Excel"
+            
+            if export_disabled:
+                st.warning("Excel limitado a 1M registros")
+            else:
+                if st.button("🚀 Gerar Arquivo", type="primary", use_container_width=True):
+                    with st.spinner("Preparando exportação..."):
+                        try:
+                            # Query completa
+                            select_cols = "member_pk" if only_member_pk else "*"
+                            export_query = f"""
+                            SELECT {select_cols}
+                            FROM read_parquet('{dataset_info['caminho']}')
+                            WHERE {where_clause}
+                            """
+                            
+                            export_df = con.execute(export_query).df()
+                            
+                            # Gera arquivo
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            
+                            if export_format == "Excel":
+                                import io
+                                buffer = io.BytesIO()
+                                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                                    export_df.to_excel(writer, index=False, sheet_name='Clientes')
+                                buffer.seek(0)
+                                file_data = buffer.getvalue()
+                                file_name = f"clientes_{timestamp}.xlsx"
+                                mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            else:
+                                file_data = export_df.to_csv(index=False).encode('utf-8')
+                                file_name = f"clientes_{timestamp}.csv"
+                                mime_type = "text/csv"
+                            
+                            # Botão de download
+                            st.download_button(
+                                label=f"📥 Baixar {export_format} ({len(export_df):,} registros)",
+                                data=file_data,
+                                file_name=file_name,
+                                mime=mime_type,
+                                use_container_width=True
+                            )
+                            
+                            st.success("✅ Arquivo gerado com sucesso!")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erro na exportação: {e}")
+        
+        con.close()
+    
+    else:
+        st.warning("⚠️ Nenhum registro encontrado com os filtros aplicados.")
+        st.info("Tente ajustar os critérios de filtragem.")
+
+else:
+    # ==========================================
+    # ESTADO INICIAL - GUIA DE USO
+    # ==========================================
+    st.markdown("---")
+    
+    col_guide1, col_guide2, col_guide3 = st.columns(3)
+    
+    with col_guide1:
+        st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+        st.markdown("### 🔍 Passo 1")
+        st.markdown("Configure os filtros na **barra lateral**")
+        st.markdown("• Selecione categorias")
+        st.markdown("• Defina períodos")
+        st.markdown("• Escolha setores")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col_guide2:
+        st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+        st.markdown("### 📊 Passo 2")
+        st.markdown("Clique em **'Aplicar Filtros & Analisar'**")
+        st.markdown("• Visualize resultados")
+        st.markdown("• Analise métricas")
+        st.markdown("• Verifique prévia dos dados")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col_guide3:
+        st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+        st.markdown("### 📤 Passo 3")
+        st.markdown("Exporte os dados filtrados")
+        st.markdown("• Escolha formato (CSV/Excel)")
+        st.markdown("• Baixe o arquivo")
+        st.markdown("• Use em suas análises")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# RODAPÉ
+# ==========================================
+st.markdown("---")
+col_foot1, col_foot2 = st.columns([3, 1])
+with col_foot1:
+    st.caption(f"📊 Base de dados: {dataset_info['num_rows']:,} registros • Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+with col_foot2:
+    st.caption("⚡ Desenvolvido para análise de segmentação")

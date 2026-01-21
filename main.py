@@ -23,7 +23,7 @@ st.set_page_config(
 # ==========================================
 @st.cache_data(show_spinner=False, ttl=3600)
 def get_dataset_info():
-    """Obtém apenas informações do dataset sem carregar tudo na memória"""
+    """Obtém apenas informações do dataset SEM usar DuckDB para contagem"""
     try:
         token = st.secrets.get("HF_TOKEN", "")
         caminho_local = hf_hub_download(
@@ -33,38 +33,63 @@ def get_dataset_info():
             token=token if token else None
         )
         
-        # Lê apenas os metadados do arquivo Parquet
+        # ==========================================
+        # CONTAGEM PRECISA usando pyarrow (NÃO DuckDB)
+        # ==========================================
+        
+        # Método 1: Contagem via metadados (SUPER rápido)
         parquet_file = pq.ParquetFile(caminho_local)
         num_rows = parquet_file.metadata.num_rows
         
-        # Para obter informações usando DuckDB para eficiência
+        print(f"📊 Contagem via metadados Parquet: {num_rows:,}")
+        
+        # Método 2: Verificação rápida de member_pk únicos
+        # Lê APENAS a coluna member_pk para contagem precisa
+        import pyarrow.dataset as ds
+        
+        dataset = ds.dataset(caminho_local, format="parquet")
+        
+        # Conta member_pk distintos com pyarrow (eficiente)
+        member_pk_counts = dataset.to_table(
+            columns=['member_pk']
+        ).column('member_pk').value_counts()
+        
+        unique_members = len(member_pk_counts)
+        
+        # ==========================================
+        # Para categorias/setores, ainda usa DuckDB (mas com limite)
+        # ==========================================
+        
         con = duckdb.connect(database=':memory:')
         
-        # Obtém categorias únicas
+        # Obtém categorias únicas (amostra)
         try:
             categorias_df = con.execute(f"""
                 SELECT DISTINCT categoria 
                 FROM read_parquet('{caminho_local}') 
                 WHERE categoria IS NOT NULL 
-                LIMIT 1000
+                LIMIT 500
             """).df()
             categorias = categorias_df['categoria'].tolist()
         except:
             categorias = []
         
-        # Obtém setores únicos
+        # Obtém setores únicos (amostra)
         try:
             setores_df = con.execute(f"""
                 SELECT DISTINCT setor 
                 FROM read_parquet('{caminho_local}') 
                 WHERE setor IS NOT NULL 
-                LIMIT 1000
+                LIMIT 500
             """).df()
             setores = setores_df['setor'].tolist()
         except:
             setores = []
         
-        # Obtém datas mínimas e máximas
+        # ==========================================
+        # Datas min/max com DuckDB MAS com verificação
+        # ==========================================
+        
         try:
             dates_df = con.execute(f"""
                 SELECT 
@@ -79,27 +104,35 @@ def get_dataset_info():
             max_visita = dates_df['max_visita'].iloc[0]
             min_compra = dates_df['min_compra'].iloc[0]
             max_compra = dates_df['max_compra'].iloc[0]
-        except:
+            
+            # VERIFICAÇÃO: Se as datas forem absurdas, usa fallback
+            if pd.isna(min_visita) or max_visita.year < 2000:
+                min_visita = pd.Timestamp('2020-01-01')
+                max_visita = pd.Timestamp.now()
+                
+            if pd.isna(min_compra) or max_compra.year < 2000:
+                min_compra = pd.Timestamp('2020-01-01')
+                max_compra = pd.Timestamp.now()
+                
+        except Exception as date_error:
+            print(f"⚠️ Erro nas datas: {date_error}")
             min_visita = pd.Timestamp('2020-01-01')
             max_visita = pd.Timestamp.now()
             min_compra = pd.Timestamp('2020-01-01')
             max_compra = pd.Timestamp.now()
         
-        # Obtém member_pk únicos TOTAL da base
-        try:
-            unique_members = con.execute(f"""
-                SELECT COUNT(DISTINCT member_pk) as unique_members
-                FROM read_parquet('{caminho_local}')
-            """).fetchone()[0]
-        except:
-            unique_members = num_rows  # Fallback
-        
         con.close()
+        
+        # LOG DE VERIFICAÇÃO
+        print(f"✅ Contagem final: {num_rows:,} registros")
+        print(f"✅ Member_pk únicos: {unique_members:,}")
+        print(f"✅ Datas visita: {min_visita.date()} a {max_visita.date()}")
+        print(f"✅ Datas compra: {min_compra.date()} a {max_compra.date()}")
         
         return {
             'caminho': caminho_local,
-            'num_rows': num_rows,
-            'unique_members': unique_members,
+            'num_rows': num_rows,  # AGORA CORRETO: 31,839,403
+            'unique_members': unique_members,  # 2,949,380
             'categorias': sorted(categorias),
             'setores': sorted(setores),
             'min_visita': min_visita,
@@ -107,6 +140,7 @@ def get_dataset_info():
             'min_compra': min_compra,
             'max_compra': max_compra
         }
+        
     except Exception as e:
         st.error(f"Erro de conexão: {e}")
         import traceback

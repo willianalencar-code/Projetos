@@ -65,7 +65,7 @@ def get_dataset_info():
         # Carrega amostra para análise
         con = duckdb.connect(database=':memory:')
         
-        # Amostra para categorias e setores
+        # Amostra para análise
         sample_query = f"""
         SELECT DISTINCT categoria, setor
         FROM read_parquet('{caminho_local}')
@@ -116,7 +116,7 @@ def get_connection():
 # CABEÇALHO
 # ==========================================
 st.markdown("# 👥 Segmentação de Clientes")
-st.markdown("**Filtre e exporte sua base de clientes**")
+st.markdown("**Filtre e exporte sua base de clientes de forma inteligente**")
 
 # ==========================================
 # CARREGAMENTO DOS DADOS
@@ -132,11 +132,11 @@ if not dataset_info:
 # SEÇÃO DE FILTROS - SIDEBAR
 # ==========================================
 with st.sidebar:
-    st.markdown("### 🔍 Filtros")
+    st.markdown("### 🔍 Filtros Avançados")
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**Filtros Principais**")
+        st.markdown("**📋 Filtros Principais**")
         
         # Busca por ID
         id_busca = st.text_input("Buscar Cliente (ID)", 
@@ -155,10 +155,10 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**Filtros de Data**")
+        st.markdown("**📅 Filtros Temporais**")
         
         # Data de Visita
-        st.markdown("**Última Visita**")
+        st.markdown("##### Última Visita")
         col1, col2 = st.columns(2)
         with col1:
             data_inicio_visita = st.date_input("De", 
@@ -172,7 +172,7 @@ with st.sidebar:
                                            label_visibility="collapsed")
         
         # Data de Compra
-        st.markdown("**Última Compra**")
+        st.markdown("##### Última Compra")
         usar_compra = st.toggle("Ativar filtro", value=False, key="toggle_compra")
         
         if usar_compra:
@@ -195,10 +195,10 @@ with st.sidebar:
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
-        st.markdown("**Configurações de Exportação**")
+        st.markdown("**⚙️ Configurações**")
         
         only_member_pk = st.checkbox("Exportar apenas IDs", value=False)
-        export_format = st.radio("Formato:", 
+        export_format = st.radio("Formato de Saída:", 
                                 ["CSV", "Excel"], 
                                 horizontal=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -257,13 +257,13 @@ total_filtrado, clientes_unicos, taxa_conversao, primeira_visita, ultima_visita 
 # ==========================================
 # RESUMO DOS RESULTADOS
 # ==========================================
-st.markdown("### 📊 Resultados")
+st.markdown("### 📈 Resultados da Filtragem")
 
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Registros", f"{total_filtrado:,}")
+    st.metric("Registros Encontrados", f"{total_filtrado:,}")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
@@ -283,7 +283,7 @@ with col4:
     except:
         periodo_filtrado = "Período disponível"
     
-    st.metric("Período", periodo_filtrado)
+    st.metric("Período Filtrado", periodo_filtrado)
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================

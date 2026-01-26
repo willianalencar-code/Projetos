@@ -79,17 +79,30 @@ def get_dataset_info():
         categorias = sample_df['categoria'].dropna().unique().tolist()
         setores = sample_df['setor'].dropna().unique().tolist()
         
-        # Datas min/max
+        # Datas min/max para todos os campos de data
         dates_query = f"""
         SELECT 
             MIN(data_ultima_visita) as min_visita,
             MAX(data_ultima_visita) as max_visita,
             MIN(data_ultima_compra) as min_compra,
-            MAX(data_ultima_compra) as max_compra
+            MAX(data_ultima_compra) as max_compra,
+            MIN(data_cadastro) as min_cadastro,
+            MAX(data_cadastro) as max_cadastro
         FROM read_parquet('{caminho_local}')
         """
         
         dates_df = con.execute(dates_query).df()
+        
+        # Verifica se campos premium existem
+        try:
+            columns_query = f"""
+            SELECT column_name 
+            FROM parquet_schema('{caminho_local}')
+            """
+            columns_df = con.execute(columns_query).df()
+            has_flg_premium = 'flg_premium_ativo' in columns_df['column_name'].values
+        except:
+            has_flg_premium = False
         
         con.close()
         
@@ -101,7 +114,10 @@ def get_dataset_info():
             'min_visita': dates_df['min_visita'].iloc[0] if not dates_df.empty else pd.Timestamp('2020-01-01'),
             'max_visita': dates_df['max_visita'].iloc[0] if not dates_df.empty else pd.Timestamp.now(),
             'min_compra': dates_df['min_compra'].iloc[0] if not dates_df.empty else pd.Timestamp('2020-01-01'),
-            'max_compra': dates_df['max_compra'].iloc[0] if not dates_df.empty else pd.Timestamp.now()
+            'max_compra': dates_df['max_compra'].iloc[0] if not dates_df.empty else pd.Timestamp.now(),
+            'min_cadastro': dates_df['min_cadastro'].iloc[0] if not dates_df.empty else pd.Timestamp('2020-01-01'),
+            'max_cadastro': dates_df['max_cadastro'].iloc[0] if not dates_df.empty else pd.Timestamp.now(),
+            'has_flg_premium': has_flg_premium
         }
         
     except Exception as e:
@@ -147,11 +163,42 @@ with st.sidebar:
         setor_sel = st.multiselect("Setores", 
                                   dataset_info['setores'],
                                   placeholder="Selecione setores...")
+        
+        # Filtro para clientes sem compra
+        apenas_sem_compra = st.checkbox("Apenas clientes sem compra", value=False)
+        
+        # Filtro para retirar premium
+        if dataset_info['has_flg_premium']:
+            excluir_premium = st.checkbox("Excluir clientes premium", value=False)
+        else:
+            excluir_premium = False
+            st.caption("ℹ️ Campo 'flg_premium_ativo' não disponível no dataset")
+            
         st.markdown('</div>', unsafe_allow_html=True)
     
     with st.container():
         st.markdown('<div class="filter-card">', unsafe_allow_html=True)
         st.markdown("**Filtros de Data**")
+        
+        # Data de Cadastro
+        st.markdown("**Data de Cadastro**")
+        usar_cadastro = st.toggle("Ativar filtro de cadastro", value=False, key="toggle_cadastro")
+        
+        if usar_cadastro:
+            col_cad1, col_cad2 = st.columns(2)
+            with col_cad1:
+                data_inicio_cadastro = st.date_input("De", 
+                                                    value=dataset_info['min_cadastro'].date(),
+                                                    key="inicio_cadastro",
+                                                    label_visibility="collapsed")
+            with col_cad2:
+                data_fim_cadastro = st.date_input("Até", 
+                                                 value=dataset_info['max_cadastro'].date(),
+                                                 key="fim_cadastro",
+                                                 label_visibility="collapsed")
+        else:
+            data_inicio_cadastro = None
+            data_fim_cadastro = None
         
         # Data de Visita
         st.markdown("**Última Visita**")
@@ -216,12 +263,27 @@ def build_query_conditions():
         setor_list = ', '.join([f"'{s}'" for s in setor_sel])
         conditions.append(f"setor IN ({setor_list})")
     
+    # Filtro de data de visita
     conditions.append(f"data_ultima_visita >= '{data_inicio_visita}'")
     conditions.append(f"data_ultima_visita <= '{data_fim_visita}'")
     
+    # Filtro de data de compra
     if usar_compra and data_inicio_compra and data_fim_compra:
         conditions.append(f"data_ultima_compra >= '{data_inicio_compra}'")
         conditions.append(f"data_ultima_compra <= '{data_fim_compra}'")
+    
+    # Filtro de data de cadastro
+    if usar_cadastro and data_inicio_cadastro and data_fim_cadastro:
+        conditions.append(f"data_cadastro >= '{data_inicio_cadastro}'")
+        conditions.append(f"data_cadastro <= '{data_fim_cadastro}'")
+    
+    # Filtro para clientes sem compra
+    if apenas_sem_compra:
+        conditions.append("data_ultima_compra IS NULL")
+    
+    # Filtro para excluir premium
+    if excluir_premium and dataset_info['has_flg_premium']:
+        conditions.append("(flg_premium_ativo = 'N' OR flg_premium_ativo IS NULL)")
     
     return " AND ".join(conditions) if conditions else "1=1"
 
@@ -234,7 +296,7 @@ try:
     # Cria nova conexão DuckDB
     con = duckdb.connect(database=':memory:')
     
-    # Query simplificada (SEM taxa de conversão)
+    # Query com mais métricas
     analysis_query = f"""
     WITH filtered AS (
         SELECT * 
@@ -245,21 +307,29 @@ try:
         COUNT(*) as total_registros,
         COUNT(DISTINCT member_pk) as clientes_unicos,
         MIN(data_ultima_visita) as primeira_visita,
-        MAX(data_ultima_visita) as ultima_visita
+        MAX(data_ultima_visita) as ultima_visita,
+        COUNT(CASE WHEN data_ultima_compra IS NOT NULL THEN 1 END) as com_compra,
+        COUNT(CASE WHEN data_ultima_compra IS NULL THEN 1 END) as sem_compra,
+        {f"COUNT(CASE WHEN flg_premium_ativo = 'S' THEN 1 END) as premium," if dataset_info['has_flg_premium'] else "0 as premium,"}
+        {f"COUNT(CASE WHEN flg_premium_ativo = 'N' THEN 1 END) as nao_premium" if dataset_info['has_flg_premium'] else "0 as nao_premium"}
     FROM filtered
     """
     
     result = con.execute(analysis_query).fetchone()
     
     if result:
-        total_filtrado, clientes_unicos, primeira_visita, ultima_visita = result
+        if dataset_info['has_flg_premium']:
+            total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, premium, nao_premium = result
+        else:
+            total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, _, _ = result
+            premium, nao_premium = 0, 0
     else:
-        total_filtrado, clientes_unicos, primeira_visita, ultima_visita = 0, 0, None, None
+        total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, premium, nao_premium = 0, 0, None, None, 0, 0, 0, 0
         
 except Exception as e:
     st.error(f"❌ Erro na análise dos dados: {str(e)}")
     # Valores padrão em caso de erro
-    total_filtrado, clientes_unicos, primeira_visita, ultima_visita = 0, 0, None, None
+    total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, premium, nao_premium = 0, 0, None, None, 0, 0, 0, 0
     con = None
 
 # ==========================================
@@ -271,25 +341,31 @@ col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Registros", f"{total_filtrado:,}")
+    st.metric("Total Registros", f"{total_filtrado:,}")
+    if total_filtrado > 0:
+        st.caption(f"Clientes únicos: {clientes_unicos:,}")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Clientes Únicos", f"{clientes_unicos:,}")
+    if total_filtrado > 0:
+        perc_com_compra = (com_compra / total_filtrado * 100) if total_filtrado > 0 else 0
+        st.metric("Com Compra", f"{com_compra:,}", f"{perc_com_compra:.1f}%")
+        st.caption(f"Sem compra: {sem_compra:,}")
+    else:
+        st.metric("Com Compra", "0", "0%")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col3:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    try:
-        if primeira_visita and ultima_visita:
-            periodo_filtrado = f"{primeira_visita.date()} a {ultima_visita.date()}"
-        else:
-            periodo_filtrado = "Período disponível"
-    except:
-        periodo_filtrado = "Período disponível"
-    
-    st.metric("Período", periodo_filtrado)
+    if total_filtrado > 0 and dataset_info['has_flg_premium']:
+        perc_premium = (premium / total_filtrado * 100) if total_filtrado > 0 else 0
+        st.metric("Clientes Premium", f"{premium:,}", f"{perc_premium:.1f}%")
+        st.caption(f"Não premium: {nao_premium:,}")
+    else:
+        st.metric("Clientes Premium", "-", "N/D")
+        if not dataset_info['has_flg_premium']:
+            st.caption("Campo não disponível")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
@@ -298,9 +374,31 @@ with col3:
 if total_filtrado > 0 and con is not None:
     with st.expander("👁️ **Pré-visualização dos Dados**", expanded=True):
         try:
+            # Define colunas para exibição
+            base_cols = ['member_pk', 'categoria', 'setor', 'data_ultima_visita', 'data_ultima_compra']
+            extra_cols = []
+            
+            # Adiciona data_cadastro se disponível
+            columns_query = f"""
+            SELECT column_name 
+            FROM parquet_schema('{dataset_info['caminho']}')
+            """
+            columns_df = con.execute(columns_query).df()
+            available_columns = columns_df['column_name'].values
+            
+            if 'data_cadastro' in available_columns:
+                base_cols.append('data_cadastro')
+            
+            if 'flg_premium_ativo' in available_columns:
+                base_cols.append('flg_premium_ativo')
+            
+            if 'flg_funcionario' in available_columns:
+                base_cols.append('flg_funcionario')
+            
+            # Prepara query de preview
+            cols_str = ', '.join(base_cols)
             preview_query = f"""
-            SELECT member_pk, categoria, setor, 
-                   data_ultima_visita, data_ultima_compra
+            SELECT {cols_str}
             FROM read_parquet('{dataset_info['caminho']}')
             WHERE {where_clause}
             LIMIT 100
@@ -309,22 +407,34 @@ if total_filtrado > 0 and con is not None:
             preview_df = con.execute(preview_query).df()
             
             if not preview_df.empty:
+                # Configurações das colunas para exibição
+                column_config = {
+                    "member_pk": "ID Cliente",
+                    "categoria": "Categoria",
+                    "setor": "Setor",
+                    "data_ultima_visita": st.column_config.DatetimeColumn("Última Visita", format="DD/MM/YYYY"),
+                    "data_ultima_compra": st.column_config.DatetimeColumn("Última Compra", format="DD/MM/YYYY"),
+                }
+                
+                # Adiciona configuração para data_cadastro se existir
+                if 'data_cadastro' in preview_df.columns:
+                    column_config["data_cadastro"] = st.column_config.DatetimeColumn("Data Cadastro", format="DD/MM/YYYY")
+                
+                if 'flg_premium_ativo' in preview_df.columns:
+                    column_config["flg_premium_ativo"] = "Premium"
+                
+                if 'flg_funcionario' in preview_df.columns:
+                    column_config["flg_funcionario"] = "Funcionário"
+                
                 # Formatação das datas
-                date_cols = ['data_ultima_visita', 'data_ultima_compra']
+                date_cols = [col for col in preview_df.columns if 'data_' in col]
                 for col in date_cols:
-                    if col in preview_df.columns:
-                        preview_df[col] = pd.to_datetime(preview_df[col], errors='coerce')
+                    preview_df[col] = pd.to_datetime(preview_df[col], errors='coerce')
                 
                 st.dataframe(
                     preview_df,
                     use_container_width=True,
-                    column_config={
-                        "member_pk": "ID Cliente",
-                        "categoria": "Categoria",
-                        "setor": "Setor",
-                        "data_ultima_visita": st.column_config.DatetimeColumn("Última Visita", format="DD/MM/YYYY"),
-                        "data_ultima_compra": st.column_config.DatetimeColumn("Última Compra", format="DD/MM/YYYY")
-                    },
+                    column_config=column_config,
                     hide_index=True
                 )
                 st.caption(f"Mostrando 100 de {total_filtrado:,} registros")
@@ -342,7 +452,16 @@ if total_filtrado > 0 and con is not None:
     col_exp1, col_exp2 = st.columns([3, 1])
     
     with col_exp1:
-        st.info(f"**Pronto para exportar:** {total_filtrado:,} registros • {clientes_unicos:,} clientes únicos")
+        # Resumo da exportação
+        export_summary = f"**Pronto para exportar:** {total_filtrado:,} registros • {clientes_unicos:,} clientes únicos"
+        if apenas_sem_compra:
+            export_summary += " • Apenas sem compra"
+        if excluir_premium:
+            export_summary += " • Sem premium"
+        if usar_cadastro:
+            export_summary += f" • Cadastro: {data_inicio_cadastro} a {data_fim_cadastro}"
+        
+        st.info(export_summary)
     
     with col_exp2:
         export_disabled = total_filtrado > 1000000 and export_format == "Excel"

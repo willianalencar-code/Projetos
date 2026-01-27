@@ -48,6 +48,17 @@ st.markdown("""
         border-radius: 4px;
         margin: 1rem 0;
     }
+    
+    .big-metric {
+        font-size: 2.5rem !important;
+        font-weight: 700 !important;
+    }
+    
+    .metric-label {
+        font-size: 0.9rem;
+        color: #64748B;
+        margin-bottom: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -101,14 +112,16 @@ def get_dataset_info():
         
         dates_df = con.execute(dates_query).df()
         
-        # Verifica se campos premium existem usando método correto
+        # Verifica quais campos existem no dataset
         try:
             schema_query = f"DESCRIBE SELECT * FROM read_parquet('{caminho_local}') LIMIT 1"
             columns_df = con.execute(schema_query).df()
             available_columns = columns_df['column_name'].values.tolist()
             has_flg_premium = 'flg_premium_ativo' in available_columns
+            has_flg_funcionario = 'flg_funcionario' in available_columns
         except:
             has_flg_premium = False
+            has_flg_funcionario = False
             available_columns = []
         
         con.close()
@@ -125,7 +138,8 @@ def get_dataset_info():
             'max_compra': dates_df['max_compra'].iloc[0] if not dates_df.empty else pd.Timestamp.now(),
             'min_cadastro': dates_df['min_cadastro'].iloc[0] if not dates_df.empty else pd.Timestamp('2020-01-01'),
             'max_cadastro': dates_df['max_cadastro'].iloc[0] if not dates_df.empty else pd.Timestamp.now(),
-            'has_flg_premium': has_flg_premium
+            'has_flg_premium': has_flg_premium,
+            'has_flg_funcionario': has_flg_funcionario
         }
         
     except Exception as e:
@@ -175,7 +189,20 @@ with st.sidebar:
         # Filtro para clientes sem compra
         apenas_sem_compra = st.checkbox("Apenas clientes sem compra", value=False)
         
-        # FILTRO ADICIONADO: Usuários premium ativos
+        # NOVO FILTRO: Funcionários
+        if dataset_info['has_flg_funcionario']:
+            # Opções para filtro de funcionários
+            filtro_funcionarios = st.radio(
+                "Filtro de Funcionários:",
+                ["Todos", "Apenas funcionários", "Excluir funcionários"],
+                index=0,
+                key="filtro_funcionarios"
+            )
+        else:
+            filtro_funcionarios = "Todos"
+            st.caption("ℹ️ Campo 'flg_funcionario' não disponível no dataset")
+        
+        # FILTRO: Usuários premium ativos
         if dataset_info['has_flg_premium']:
             # Nova opção: filtrar apenas premium ativos
             apenas_premium = st.checkbox("Apenas usuários premium ativos", value=False)
@@ -313,6 +340,14 @@ def build_query_conditions():
     if apenas_sem_compra:
         conditions.append("data_ultima_compra IS NULL")
     
+    # NOVO FILTRO: Funcionários
+    if dataset_info['has_flg_funcionario']:
+        if filtro_funcionarios == "Apenas funcionários":
+            conditions.append("flg_funcionario = 'S'")
+        elif filtro_funcionarios == "Excluir funcionários":
+            conditions.append("(flg_funcionario = 'N' OR flg_funcionario IS NULL)")
+        # "Todos" não adiciona condição
+    
     # Filtros de premium (exclusivos - corrigido)
     if dataset_info['has_flg_premium']:
         if apenas_premium:
@@ -345,8 +380,8 @@ try:
     # Cria nova conexão DuckDB
     con = duckdb.connect(database=':memory:')
     
-    # Query com mais métricas
-    analysis_query = f"""
+    # Query para obter estatísticas dos filtros aplicados
+    stats_query = f"""
     WITH filtered AS (
         SELECT * 
         FROM read_parquet('{dataset_info['caminho']}')
@@ -355,73 +390,70 @@ try:
     SELECT 
         COUNT(*) as total_registros,
         COUNT(DISTINCT member_pk) as clientes_unicos,
-        MIN(data_ultima_visita) as primeira_visita,
-        MAX(data_ultima_visita) as ultima_visita,
-        COUNT(CASE WHEN data_ultima_compra IS NOT NULL THEN 1 END) as com_compra,
-        COUNT(CASE WHEN data_ultima_compra IS NULL THEN 1 END) as sem_compra,
-        {f"COUNT(CASE WHEN flg_premium_ativo = 'S' THEN 1 END) as premium," if dataset_info['has_flg_premium'] else "0 as premium,"}
-        {f"COUNT(CASE WHEN flg_premium_ativo = 'N' THEN 1 END) as nao_premium," if dataset_info['has_flg_premium'] else "0 as nao_premium,"}
-        {f"COUNT(CASE WHEN flg_premium_ativo IS NULL THEN 1 END) as premium_nao_informado" if dataset_info['has_flg_premium'] else "0 as premium_nao_informado"}
+        {f"COUNT(CASE WHEN flg_funcionario = 'S' THEN 1 END) as funcionarios," if dataset_info['has_flg_funcionario'] else "0 as funcionarios,"}
+        {f"COUNT(CASE WHEN flg_premium_ativo = 'S' THEN 1 END) as premium" if dataset_info['has_flg_premium'] else "0 as premium"}
     FROM filtered
     """
     
-    result = con.execute(analysis_query).fetchone()
+    result = con.execute(stats_query).fetchone()
     
     if result:
-        if dataset_info['has_flg_premium']:
-            total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, premium, nao_premium, premium_nao_informado = result
+        if dataset_info['has_flg_funcionario'] and dataset_info['has_flg_premium']:
+            total_filtrado, clientes_unicos, funcionarios, premium = result
+        elif dataset_info['has_flg_funcionario']:
+            total_filtrado, clientes_unicos, funcionarios, _ = result
+            premium = 0
+        elif dataset_info['has_flg_premium']:
+            total_filtrado, clientes_unicos, _, premium = result
+            funcionarios = 0
         else:
-            total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, _, _, _ = result
-            premium, nao_premium, premium_nao_informado = 0, 0, 0
+            total_filtrado, clientes_unicos, _, _ = result
+            funcionarios, premium = 0, 0
     else:
-        total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, premium, nao_premium, premium_nao_informado = 0, 0, None, None, 0, 0, 0, 0, 0
+        total_filtrado, clientes_unicos, funcionarios, premium = 0, 0, 0, 0
         
 except Exception as e:
     st.error(f"❌ Erro na análise dos dados: {str(e)}")
     # Valores padrão em caso de erro
-    total_filtrado, clientes_unicos, primeira_visita, ultima_visita, com_compra, sem_compra, premium, nao_premium, premium_nao_informado = 0, 0, None, None, 0, 0, 0, 0, 0
+    total_filtrado, clientes_unicos, funcionarios, premium = 0, 0, 0, 0
     con = None
 
 # ==========================================
-# RESUMO DOS RESULTADOS (3 COLUNAS APENAS)
+# RESUMO DOS RESULTADOS (APENAS 2 BIG NUMBERS)
 # ==========================================
 st.markdown("### 📊 Resultados")
 
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 
 with col1:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    st.metric("Total Registros", f"{total_filtrado:,}")
+    st.markdown('<div class="metric-label">Total de Registros</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="big-metric">{total_filtrado:,}</div>', unsafe_allow_html=True)
+    
+    # Informações adicionais relevantes
     if total_filtrado > 0:
-        st.caption(f"Clientes únicos: {clientes_unicos:,}")
-        if primeira_visita and ultima_visita:
-            st.caption(f"Visitas: {primeira_visita.strftime('%d/%m/%Y')} a {ultima_visita.strftime('%d/%m/%Y')}")
+        # Mostra funcionários se o filtro estiver ativo
+        if dataset_info['has_flg_funcionario'] and funcionarios > 0:
+            perc_funcionarios = (funcionarios / total_filtrado * 100) if total_filtrado > 0 else 0
+            st.caption(f"Funcionários: {funcionarios:,} ({perc_funcionarios:.1f}%)")
+        
+        # Mostra premium se o filtro estiver ativo
+        if dataset_info['has_flg_premium'] and premium > 0:
+            perc_premium = (premium / total_filtrado * 100) if total_filtrado > 0 else 0
+            st.caption(f"Premium: {premium:,} ({perc_premium:.1f}%)")
+            
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
     st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    if total_filtrado > 0:
-        perc_com_compra = (com_compra / total_filtrado * 100) if total_filtrado > 0 else 0
-        st.metric("Com Compra", f"{com_compra:,}", f"{perc_com_compra:.1f}%")
-        perc_sem_compra = (sem_compra / total_filtrado * 100) if total_filtrado > 0 else 0
-        st.caption(f"Sem compra: {sem_compra:,} ({perc_sem_compra:.1f}%)")
-    else:
-        st.metric("Com Compra", "0", "0%")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with col3:
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-    if total_filtrado > 0 and dataset_info['has_flg_premium']:
-        perc_premium = (premium / total_filtrado * 100) if total_filtrado > 0 else 0
-        perc_nao_premium = (nao_premium / total_filtrado * 100) if total_filtrado > 0 else 0
-        st.metric("Premium Ativos", f"{premium:,}", f"{perc_premium:.1f}%")
-        st.caption(f"Não premium: {nao_premium:,} ({perc_nao_premium:.1f}%)")
-        if premium_nao_informado > 0:
-            st.caption(f"Não informado: {premium_nao_informado:,}")
-    else:
-        st.metric("Premium Ativos", "-", "N/D")
-        if not dataset_info['has_flg_premium']:
-            st.caption("Campo 'flg_premium_ativo' não disponível")
+    st.markdown('<div class="metric-label">Clientes Únicos</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="big-metric">{clientes_unicos:,}</div>', unsafe_allow_html=True)
+    
+    # Informações adicionais se desejar
+    if total_filtrado > 0 and clientes_unicos > 0:
+        duplicados = total_filtrado - clientes_unicos
+        if duplicados > 0:
+            st.caption(f"{duplicados:,} registros duplicados")
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
@@ -501,18 +533,36 @@ if total_filtrado > 0 and con is not None:
     col_exp1, col_exp2 = st.columns([3, 1])
     
     with col_exp1:
-        # Resumo da exportação
-        export_summary = f"**Pronto para exportar:** {total_filtrado:,} registros • {clientes_unicos:,} clientes únicos"
+        # Resumo da exportação com informações dos filtros
+        export_summary = f"**{total_filtrado:,} registros** • **{clientes_unicos:,} clientes únicos**"
+        
+        # Informa filtros ativos mais relevantes
+        active_filters = []
         if apenas_sem_compra:
-            export_summary += " • Apenas sem compra"
-        if apenas_premium:
-            export_summary += " • Apenas premium ativos"
-        elif excluir_premium:
-            export_summary += " • Sem premium"
-        if usar_cadastro:
-            export_summary += f" • Cadastro: {data_inicio_cadastro} a {data_fim_cadastro}"
-        if usar_compra:
-            export_summary += f" • Compra: {data_inicio_compra} a {data_fim_compra}"
+            active_filters.append("sem compra")
+        
+        if dataset_info['has_flg_funcionario'] and filtro_funcionarios != "Todos":
+            active_filters.append(filtro_funcionarios.lower())
+        
+        if dataset_info['has_flg_premium']:
+            if apenas_premium:
+                active_filters.append("premium ativos")
+            elif excluir_premium:
+                active_filters.append("sem premium")
+        
+        if active_filters:
+            export_summary += f" • **Filtros:** {', '.join(active_filters)}"
+        
+        # Adiciona estatísticas relevantes
+        stats_details = []
+        if dataset_info['has_flg_funcionario'] and funcionarios > 0:
+            stats_details.append(f"{funcionarios:,} funcionários")
+        
+        if dataset_info['has_flg_premium'] and premium > 0:
+            stats_details.append(f"{premium:,} premium")
+        
+        if stats_details:
+            export_summary += f" • {' • '.join(stats_details)}"
         
         st.info(export_summary)
     

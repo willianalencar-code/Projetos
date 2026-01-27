@@ -93,13 +93,10 @@ def get_dataset_info():
         
         dates_df = con.execute(dates_query).df()
         
-        # Verifica se campos premium existem
+        # Verifica se campos premium existem usando método correto
         try:
-            columns_query = f"""
-            SELECT column_name 
-            FROM parquet_schema('{caminho_local}')
-            """
-            columns_df = con.execute(columns_query).df()
+            schema_query = f"DESCRIBE SELECT * FROM read_parquet('{caminho_local}') LIMIT 1"
+            columns_df = con.execute(schema_query).df()
             has_flg_premium = 'flg_premium_ativo' in columns_df['column_name'].values
         except:
             has_flg_premium = False
@@ -376,16 +373,27 @@ if total_filtrado > 0 and con is not None:
         try:
             # Define colunas para exibição
             base_cols = ['member_pk', 'categoria', 'setor', 'data_ultima_visita', 'data_ultima_compra']
-            extra_cols = []
             
-            # Adiciona data_cadastro se disponível
-            columns_query = f"""
-            SELECT column_name 
-            FROM parquet_schema('{dataset_info['caminho']}')
-            """
-            columns_df = con.execute(columns_query).df()
-            available_columns = columns_df['column_name'].values
+            # Verifica quais colunas existem no arquivo Parquet
+            try:
+                # Método correto para obter colunas do Parquet no DuckDB
+                schema_query = f"""
+                DESCRIBE SELECT * FROM read_parquet('{dataset_info['caminho']}')
+                """
+                schema_df = con.execute(schema_query).df()
+                available_columns = schema_df['column_name'].tolist()
+            except:
+                # Fallback: usa um subconjunto de dados para detectar colunas
+                sample_query = f"""
+                SELECT * FROM read_parquet('{dataset_info['caminho']}') LIMIT 1
+                """
+                try:
+                    sample_df = con.execute(sample_query).df()
+                    available_columns = sample_df.columns.tolist()
+                except:
+                    available_columns = base_cols  # usa colunas padrão
             
+            # Adiciona colunas extras se disponíveis
             if 'data_cadastro' in available_columns:
                 base_cols.append('data_cadastro')
             
